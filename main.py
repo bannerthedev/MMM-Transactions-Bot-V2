@@ -166,7 +166,7 @@ DEFAULT_HEADSETS = [
     "Meta Quest 3s",
     "HTC Vive",
     "HTC Vive Pro",
-    Valve Index",
+    "Valve Index",
 ]
 
 def load_headsets() -> list[str]:
