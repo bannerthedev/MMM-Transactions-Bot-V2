@@ -4,9 +4,11 @@ import os
 import re
 from urllib.parse import urlparse, parse_qs
 import random
+import dotenv
 from PIL import Image, ImageDraw, ImageFont
 from datetime import datetime, timedelta
 from typing import Optional
+from dotenv import load_dotenv
 import aiohttp
 import xml.etree.ElementTree as ET
 
@@ -19,7 +21,6 @@ from aiohttp import web
 
 
 # ---------------- CONFIG ----------------
-BOT_TOKEN = "MTUwMjA4NzI4NjM2MjQ3NjU3NA.G21ZAh.V37DFbCZl-B0qXyYGSNwpDMN3XqmaE6M827lFk"
 TEST_GUILD_ID = 1492369331693027408
 
 # Channel IDs
@@ -102,14 +103,16 @@ DEFAULT_CONFIG = {
 }
 
 # ---------------- FILES ----------------
-TEAMS_FILE = Path("teams.json")
-PLAYER_HISTORY_FILE = Path("player_history.json")
-INVITES_FILE = Path("invites.json")
-ROSTER_LOCK_FILE = Path("roster_lock.json")
-CONFIG_FILE = Path("config.json")  # replace CONFIG_PATH
-YOUTUBE_STATE_FILE = Path("youtube_state.json")
-CODES_STATE_FILE = Path("codes_state.json")
-HEADSETS_FILE = Path("headsets.json")
+data_file = os.getenv("data_file", "/data")
+os.makedirs(data_file, exist_ok=True)
+TEAMS_FILE = os.path.join(data_file, "teams.json")
+PLAYER_HISTORY_FILE = os.path.join(data_file, "player_history.json")
+INVITES_FILE = os.path.join(data, "invites.json")
+ROSTER_LOCK_FILE = os.path.join(data_file, "roster_lock.json")
+CONFIG_FILE = os.path.join(data_file, "config.json")  # replace CONFIG_PATH
+YOUTUBE_STATE_FILE = os.path.join(data_file, "youtube_state.json")
+CODES_STATE_FILE = os.path.join(data_file, "codes_state.json")
+HEADSETS_FILE = os.path.join(data_file, "headsets.json")
 
 
 
@@ -161,7 +164,9 @@ DEFAULT_HEADSETS = [
     "Meta Quest 2",
     "Meta Quest 3",
     "Meta Quest 3s",
-    "Meta Quest Pro",
+    "HTC Vive",
+    "HTC Vive Pro",
+    Valve Index",
 ]
 
 def load_headsets() -> list[str]:
