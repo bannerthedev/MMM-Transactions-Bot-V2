@@ -103,16 +103,17 @@ DEFAULT_CONFIG = {
 }
 
 # ---------------- FILES ----------------
-data_file = os.getenv("data_file", "/data")
-os.makedirs(data_file, exist_ok=True)
-TEAMS_FILE = os.path.join(data_file, "teams.json")
-PLAYER_HISTORY_FILE = os.path.join(data_file, "player_history.json")
-INVITES_FILE = os.path.join(data_file, "invites.json")
-ROSTER_LOCK_FILE = os.path.join(data_file, "roster_lock.json")
-CONFIG_FILE = os.path.join(data_file, "config.json")  # replace CONFIG_PATH
-YOUTUBE_STATE_FILE = os.path.join(data_file, "youtube_state.json")
-CODES_STATE_FILE = os.path.join(data_file, "codes_state.json")
-HEADSETS_FILE = os.path.join(data_file, "headsets.json")
+data_dir = Path(os.getenv("data_file", "/data"))
+data_dir.mkdir(parents=True, exist_ok=True)
+
+TEAMS_FILE = data_dir / "teams.json"
+PLAYER_HISTORY_FILE = data_dir / "player_history.json"
+INVITES_FILE = data_dir / "invites.json"
+ROSTER_LOCK_FILE = data_dir / "roster_lock.json"
+CONFIG_FILE = data_dir / "config.json"
+YOUTUBE_STATE_FILE = data_dir / "youtube_state.json"
+CODES_STATE_FILE = data_dir / "codes_state.json"
+HEADSETS_FILE = data_dir / "headsets.json"
 
 
 
@@ -214,19 +215,17 @@ def save_codes_state(data: dict):
 
 def save_config(cfg):
     try:
-        cfg_path = os.path.join(data_file, CONFIG_FILE)  # works if CONFIG_FILE is str or Path
-        with cfg_path.open("w", encoding="utf-8") as f:
+        with CONFIG_FILE.open("w", encoding="utf-8") as f:
             json.dump(cfg, f, indent=2)
     except Exception:
         pass
 
 def load_config():
-    cfg_path = os.path.join(data_file, CONFIG_FILE)  # works if CONFIG_FILE is str or Path
-    if not cfg_path.is_file():
+    if not CONFIG_FILE.is_file():
         save_config(DEFAULT_CONFIG)
         return DEFAULT_CONFIG.copy()
     try:
-        with cfg_path.open("r", encoding="utf-8") as f:
+        with CONFIG_FILE.open("r", encoding="utf-8") as f:
             return json.load(f)
     except Exception:
         return DEFAULT_CONFIG.copy()
