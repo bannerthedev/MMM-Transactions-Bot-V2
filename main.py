@@ -214,17 +214,19 @@ def save_codes_state(data: dict):
 
 def save_config(cfg):
     try:
-        with CONFIG_FILE.open("w", encoding="utf-8") as f:
+        cfg_path = os.path.join(data_file, CONFIG_FILE)  # works if CONFIG_FILE is str or Path
+        with cfg_path.open("w", encoding="utf-8") as f:
             json.dump(cfg, f, indent=2)
     except Exception:
         pass
 
 def load_config():
-    if not CONFIG_FILE.is_file():
+    cfg_path = os.path.join(data_file, CONFIG_FILE)  # works if CONFIG_FILE is str or Path
+    if not cfg_path.is_file():
         save_config(DEFAULT_CONFIG)
         return DEFAULT_CONFIG.copy()
     try:
-        with CONFIG_FILE.open("r", encoding="utf-8") as f:
+        with cfg_path.open("r", encoding="utf-8") as f:
             return json.load(f)
     except Exception:
         return DEFAULT_CONFIG.copy()
