@@ -5964,4 +5964,4 @@ async def on_ready():
     print(f"Logged in as {bot.user} (ID: {bot.user.id})")
 
 if __name__ == "__main__":
-    bot.run(BOT_TOKEN)
+    bot.run(os.getenv("BOT_TOKEN"))
