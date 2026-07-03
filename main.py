@@ -6229,8 +6229,10 @@ async def start_web_api():
         resp.headers["Access-Control-Allow-Origin"] = "*"
         return resp
 
-    # /tickets/messages (optional)
+    # /tickets/messages (safe fallback)
     async def web_messages_handler(request: web.Request):
+        # If you have get_messages_since implemented elsewhere, call it here.
+        # For now return empty result so endpoint always works.
         session_id = request.query.get("session_id")
         if not session_id:
             resp = web.json_response({"messages": [], "next_index": 0})
@@ -6240,8 +6242,8 @@ async def start_web_api():
             since = int(request.query.get("since", "0"))
         except Exception:
             since = 0
-        msgs, new_idx = get_messages_since(session_id, since) if 'get_messages_since' in globals() else ([], 0)
-        resp = web.json_response({"messages": msgs, "next_index": new_idx})
+        # no message store available -> empty response
+        resp = web.json_response({"messages": [], "next_index": 0})
         resp.headers["Access-Control-Allow-Origin"] = "*"
         return resp
 
