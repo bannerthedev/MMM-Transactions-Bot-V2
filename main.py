@@ -6040,9 +6040,6 @@ class SchedulingAdmin(commands.Cog):
 
 
 # ---------- Web API helpers (module-level) ----------
-# Requires: pip install beautifulsoup4
-from bs4 import BeautifulSoup
-
 GOOGLE_DOC_ID = "15C61xZ9CJOYD94Mk4JSTBb0O3nSXR6u_KIQEIHxbuE8"
 DOC_EXPORT_URL = f"https://docs.google.com/document/d/{GOOGLE_DOC_ID}/export?format=html"
 
