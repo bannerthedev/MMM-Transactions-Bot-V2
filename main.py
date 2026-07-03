@@ -349,14 +349,126 @@ INTENTS.dm_messages = True
 INTENTS.guilds = True
 INTENTS.message_content = True
 
+# -------- scan-teams command (plain app command) --------
+@app_commands.command(name="scan-teams", description="Admin: register existing team roles into teams.json")
+@app_commands.default_permissions(administrator=True)
+async def scan_teams(interaction: discord.Interaction):
+    guild = interaction.guild
+    if guild is None:
+        await interaction.response.send_message("Use this in a server.", ephemeral=True)
+        return
+
+    team_roles = []
+    for role in guild.roles:
+        if role.is_default() or role.managed:
+            continue
+        if role.id in {
+            HEAD_REF_ROLE_ID, REF_ROLE_ID,
+            HEAD_CASTER_ROLE_ID, CASTER_ROLE_ID,
+            CAPTAIN_ROLE_ID, CO_CAPTAIN_ROLE_ID,
+            TEAM_PLAYER_ROLE_ID, TEAM_EXEC_ROLE_ID,
+            BOARD_OF_DIRECTORS_ROLE_ID, COMMUNITY_MANAGER_ROLE_ID,
+            SUPERVISOR_ROLE_ID, DEVELOPMENT_TEAM_ROLE_ID,
+            STREAM_WATCHER_ROLE_ID, UNBORN_CAPTAIN_ROLE_ID,
+            EVENT_PING_ROLE_ID, SCRIM_REFEREE_ROLE_ID,
+        }:
+            continue
+        # simple rule: name contains "team" (adjust as needed)
+        if "team" in role.name.lower():
+            team_roles.append(role)
+
+    if not team_roles:
+        await interaction.response.send_message("No candidate team roles found by scan.", ephemeral=True)
+        return
+
+    existing = []
+    if TEAMS_FILE.is_file():
+        try:
+            existing = json.loads(TEAMS_FILE.read_text("utf-8"))
+        except Exception:
+            existing = []
+    if not isinstance(existing, list):
+        existing = []
+
+    for r in team_roles:
+        if not any(str(e.get("role_id")) == str(r.id) for e in existing):
+            existing.append({"role_id": r.id, "name": r.name})
+
+    try:
+        TEAMS_FILE.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+    except Exception as e:
+        await interaction.response.send_message(f"Failed to write teams.json: `{e}`", ephemeral=True)
+        return
+
+    await interaction.response.send_message(
+        f"Registered {len(team_roles)} team role(s) into teams.json.",
+        ephemeral=True,
+    )
+
+# -------- MainBot class using command_prefix + setup_hook --------
 class MainBot(commands.Bot):
+    def __init__(self):
+        super().__init__(command_prefix="!", intents=INTENTS)
+
     async def setup_hook(self):
         guild_obj = Object(id=TEST_GUILD_ID)
-        # add cogs...
-        await self.tree.sync(guild=guild_obj)
-        print("Commands synced.")
 
+        # your existing cog list
+        cog_names = [
+            "SettingsCog",
+            "AdminPanel",
+            "ManageTeam",
+            "DoneCommand",
+            "RosterCog",
+            "InfoCommands",
+            "AdminManage",
+            "FAQBracketCog",
+            "StandingCog",
+            "SchedulingAdmin",
+            "BracketAdmin",
+            "LeaveCog",
+            "AutoDisbandScrim",
+            "SaySomethingCog",
+            "ForceTimeCog",
+            "CommandGuideCog",
+            "YouTubePollerCog",
+            "AutoCodeCog",
+            "HeadsetInfoCog",
+            "ServerStatsCog",
+            "TeamRoleAutoOrderCog",
+            "RescrimCog",
+            "RoleOrderFixCog",
+        ]
+        for name in cog_names:
+            cls = globals().get(name)
+            if cls is None:
+                print(f"Skipping cog {name}: not defined")
+                continue
+            try:
+                await self.add_cog(cls(self))
+                print(f"Added cog: {name}")
+            except Exception:
+                import traceback
+                traceback.print_exc()
+                print(f"Failed to add cog: {name}")
+
+        # register scan-teams for this guild
+        self.tree.add_command(scan_teams, guild=guild_obj)
+
+        try:
+            await self.tree.sync(guild=guild_obj)
+            print("Commands synced.")
+        except Exception:
+            import traceback
+            traceback.print_exc()
+            print("Failed to sync commands.")
+
+# -------- create and run the bot --------
 bot = MainBot()
+
+@bot.event
+async def on_ready():
+    print(f"Logged in as {bot.user} (ID: {bot.user.id})")
 
 
 
