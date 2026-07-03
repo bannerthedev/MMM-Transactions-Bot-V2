@@ -349,60 +349,14 @@ INTENTS.dm_messages = True
 INTENTS.guilds = True
 INTENTS.message_content = True
 
-# create the bot here
-bot = commands.Bot(command_prefix="!", intents=INTENTS)
+class MainBot(commands.Bot):
+    async def setup_hook(self):
+        guild_obj = Object(id=TEST_GUILD_ID)
+        # add cogs...
+        await self.tree.sync(guild=guild_obj)
+        print("Commands synced.")
 
-@bot.tree.command(name="scan-teams", description="Admin: register existing team roles into teams.json")
-@app_commands.guilds(discord.Object(id=TEST_GUILD_ID))  # use your league guild ID constant here
-@app_commands.default_permissions(administrator=True)
-async def scan_teams(interaction: discord.Interaction):
-    guild = interaction.guild
-    if guild is None:
-        await interaction.response.send_message("Use this in a server.", ephemeral=True)
-        return
-
-    # Pick which roles are teams. This is a simple heuristic; tweak as needed.
-    team_roles = []
-    for role in guild.roles:
-        if role.is_default() or role.managed:
-            continue
-        # skip obvious non-team roles
-        if role.id in {
-            MOD_ROLE_ID, TRIAL_MOD_ROLE_ID,
-            # add more global roles you want to skip
-        }:
-            continue
-        # Example rule: name contains "team" OR it's under your Team Player role etc.
-        if "team" in role.name.lower():
-            team_roles.append(role)
-
-    if not team_roles:
-        await interaction.response.send_message("No candidate team roles found by scan.", ephemeral=True)
-        return
-
-    existing = []
-    if TEAMS_FILE.is_file():
-        try:
-            existing = json.loads(TEAMS_FILE.read_text("utf-8"))
-        except Exception:
-            existing = []
-    if not isinstance(existing, list):
-        existing = []
-
-    for r in team_roles:
-        if not any(str(e.get("role_id")) == str(r.id) for e in existing):
-            existing.append({"role_id": r.id, "name": r.name})
-
-    try:
-        TEAMS_FILE.write_text(json.dumps(existing, indent=2), encoding="utf-8")
-    except Exception as e:
-        await interaction.response.send_message(f"Failed to write teams.json: `{e}`", ephemeral=True)
-        return
-
-    await interaction.response.send_message(
-        f"Registered {len(team_roles)} team role(s) into teams.json.",
-        ephemeral=True,
-    )
+bot = MainBot()
 
 
 
@@ -5894,6 +5848,70 @@ class RescrimCog(commands.Cog):
             ephemeral=True,
         )
 
+
+
+
+
+@app_commands.command(name="scan-teams", description="Admin: register existing team roles into teams.json")
+@app_commands.default_permissions(administrator=True)
+async def scan_teams(interaction: discord.Interaction):
+    guild = interaction.guild
+    if guild is None:
+        await interaction.response.send_message("Use this in a server.", ephemeral=True)
+        return
+
+    team_roles = []
+    for role in guild.roles:
+        if role.is_default() or role.managed:
+            continue
+        # skip obvious non-team roles
+        if role.id in {
+            HEAD_REF_ROLE_ID, REF_ROLE_ID,
+            HEAD_CASTER_ROLE_ID, CASTER_ROLE_ID,
+            CAPTAIN_ROLE_ID, CO_CAPTAIN_ROLE_ID,
+            TEAM_PLAYER_ROLE_ID, TEAM_EXEC_ROLE_ID,
+            BOARD_OF_DIRECTORS_ROLE_ID, COMMUNITY_MANAGER_ROLE_ID,
+            SUPERVISOR_ROLE_ID, DEVELOPMENT_TEAM_ROLE_ID,
+            STREAM_WATCHER_ROLE_ID, UNBORN_CAPTAIN_ROLE_ID,
+            EVENT_PING_ROLE_ID, SCRIM_REFEREE_ROLE_ID,
+        }:
+            continue
+        # Example rule: require "team" in name; adjust if needed
+        if "team" in role.name.lower():
+            team_roles.append(role)
+
+    if not team_roles:
+        await interaction.response.send_message("No candidate team roles found by scan.", ephemeral=True)
+        return
+
+    existing = []
+    if TEAMS_FILE.is_file():
+        try:
+            existing = json.loads(TEAMS_FILE.read_text("utf-8"))
+        except Exception:
+            existing = []
+    if not isinstance(existing, list):
+        existing = []
+
+    for r in team_roles:
+        if not any(str(e.get("role_id")) == str(r.id) for e in existing):
+            existing.append({"role_id": r.id, "name": r.name})
+
+    try:
+        TEAMS_FILE.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+    except Exception as e:
+        await interaction.response.send_message(f"Failed to write teams.json: `{e}`", ephemeral=True)
+        return
+
+    await interaction.response.send_message(
+        f"Registered {len(team_roles)} team role(s) into teams.json.",
+        ephemeral=True,
+    )
+
+
+
+
+
 # ---------------- Admin command: delete scheduling channels ----------------
 class SchedulingAdmin(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -5945,10 +5963,6 @@ class SchedulingAdmin(commands.Cog):
 
 # ---------------- BOT SETUP ----------------
 class MainBot(commands.Bot):
-    def __init__(self):
-        super().__init__(command_prefix="!", intents=INTENTS)
-        self._web_runner: web.AppRunner | None = None
-
     async def setup_hook(self):
         guild_obj = Object(id=TEST_GUILD_ID)
         cog_names = [
@@ -5976,7 +5990,6 @@ class MainBot(commands.Bot):
             "RescrimCog",
             "RoleOrderFixCog",
         ]
-
         for name in cog_names:
             cls = globals().get(name)
             if cls is None:
@@ -5989,6 +6002,9 @@ class MainBot(commands.Bot):
                 import traceback
                 traceback.print_exc()
                 print(f"Failed to add cog: {name}")
+
+        # NEW: register scan-teams on this bot's tree for this guild
+        self.tree.add_command(scan_teams, guild=guild_obj)
 
         try:
             await self.tree.sync(guild=guild_obj)
