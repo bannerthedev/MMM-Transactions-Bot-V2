@@ -404,65 +404,6 @@ async def scan_teams(interaction: discord.Interaction):
         f"Registered {len(team_roles)} team role(s) into teams.json.",
         ephemeral=True,
     )
-
-# -------- MainBot class using command_prefix + setup_hook --------
-class MainBot(commands.Bot):
-    def __init__(self):
-        super().__init__(command_prefix="!", intents=INTENTS)
-
-    async def setup_hook(self):
-        guild_obj = Object(id=TEST_GUILD_ID)
-
-        # your existing cog list
-        cog_names = [
-            "SettingsCog",
-            "AdminPanel",
-            "ManageTeam",
-            "DoneCommand",
-            "RosterCog",
-            "InfoCommands",
-            "AdminManage",
-            "FAQBracketCog",
-            "StandingCog",
-            "SchedulingAdmin",
-            "BracketAdmin",
-            "LeaveCog",
-            "AutoDisbandScrim",
-            "SaySomethingCog",
-            "ForceTimeCog",
-            "CommandGuideCog",
-            "YouTubePollerCog",
-            "AutoCodeCog",
-            "HeadsetInfoCog",
-            "ServerStatsCog",
-            "TeamRoleAutoOrderCog",
-            "RescrimCog",
-            "RoleOrderFixCog",
-        ]
-        for name in cog_names:
-            cls = globals().get(name)
-            if cls is None:
-                print(f"Skipping cog {name}: not defined")
-                continue
-            try:
-                await self.add_cog(cls(self))
-                print(f"Added cog: {name}")
-            except Exception:
-                import traceback
-                traceback.print_exc()
-                print(f"Failed to add cog: {name}")
-
-        # register scan-teams for this guild
-        self.tree.add_command(scan_teams, guild=guild_obj)
-
-        try:
-            await self.tree.sync(guild=guild_obj)
-            print("Commands synced.")
-        except Exception:
-            import traceback
-            traceback.print_exc()
-            print("Failed to sync commands.")
-
 # -------- create and run the bot --------
 bot = MainBot()
 
@@ -6075,8 +6016,12 @@ class SchedulingAdmin(commands.Cog):
 
 # ---------------- BOT SETUP ----------------
 class MainBot(commands.Bot):
+    def __init__(self):
+        super().__init__(command_prefix="!", intents=INTENTS)
+
     async def setup_hook(self):
         guild_obj = Object(id=TEST_GUILD_ID)
+
         cog_names = [
             "SettingsCog",
             "AdminPanel",
@@ -6115,7 +6060,7 @@ class MainBot(commands.Bot):
                 traceback.print_exc()
                 print(f"Failed to add cog: {name}")
 
-        # NEW: register scan-teams on this bot's tree for this guild
+        # register scan-teams on this bot's tree for this guild
         self.tree.add_command(scan_teams, guild=guild_obj)
 
         try:
