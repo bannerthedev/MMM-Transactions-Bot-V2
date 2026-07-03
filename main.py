@@ -6011,6 +6011,7 @@ class SchedulingAdmin(commands.Cog):
 class MainBot(commands.Bot):
     def __init__(self):
         super().__init__(command_prefix="!", intents=INTENTS)
+        self._web_runner: web.AppRunner | None = None
 
     async def setup_hook(self):
         guild_obj = Object(id=TEST_GUILD_ID)
@@ -6056,42 +6057,47 @@ class MainBot(commands.Bot):
         # register scan-teams
         self.tree.add_command(scan_teams, guild=guild_obj)
 
-        try:
-            await self.tree.sync(guild=guild_obj)
-            print("Commands synced.")
-        except Exception:
-            import traceback
-            traceback.print_exc()
-            print("Failed to sync commands.")
-
         # ---------- HTTP API for member + team count ----------
         app = web.Application()
 
         async def member_count_handler(request: web.Request):
             guild = self.get_guild(TEST_GUILD_ID)
 
+            # total members
             member_count = guild.member_count if guild else 0
 
+            # ONLINE members (non-bots, not offline)
+            online_count = 0
+            if guild is not None:
+                for m in guild.members:
+                    if m.bot:
+                        continue
+                    if m.status != discord.Status.offline:
+                        online_count += 1
+
+            # team_count from transactions channel logs
             team_count = 0
             if guild is not None:
-                try:
-                    teams = load_teams()
-                except Exception:
-                    teams = []
-                for entry in teams:
-                    rid = entry.get("role_id")
-                    if not rid:
-                        continue
-                    try:
-                        rid_int = int(rid)
-                    except (TypeError, ValueError):
-                        continue
-                    if guild.get_role(rid_int) is not None:
-                        team_count += 1
+                tx_ch = guild.get_channel(TRANSACTIONS_CHANNEL_ID)
+                if isinstance(tx_ch, discord.TextChannel):
+                    created_ids = set()
+                    disbanded_ids = set()
+                    async for msg in tx_ch.history(limit=500):
+                        content = (msg.content or "").lower()
+                        if "new team created" in content:
+                            for role in msg.role_mentions:
+                                created_ids.add(role.id)
+                        if "has been disbanded" in content:
+                            for role in msg.role_mentions:
+                                disbanded_ids.add(role.id)
+                    live_team_ids = created_ids - disbanded_ids
+                    team_count = len(live_team_ids)
 
-            data = {"member_count": member_count, "team_count": team_count}
-
-            # CORS: allow your browser to call from your PC
+            data = {
+                "member_count": member_count,
+                "team_count": team_count,
+                "online_count": online_count,
+            }
             resp = web.json_response(data)
             resp.headers["Access-Control-Allow-Origin"] = "*"
             return resp
@@ -6107,6 +6113,14 @@ class MainBot(commands.Bot):
         await site.start()
         print(f"Stats API running on port {port} at /member_count")
         # -------------------------------------------------------
+
+        try:
+            await self.tree.sync(guild=guild_obj)
+            print("Commands synced.")
+        except Exception:
+            import traceback
+            traceback.print_exc()
+            print("Failed to sync commands.")
 
     async def close(self):
         if self._web_runner is not None:
