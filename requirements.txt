@@ -1,4 +1,5 @@
 discord.py
-python-dotenv
-pillow
 aiohttp
+pillow
+beautifulsoup4
+openai
