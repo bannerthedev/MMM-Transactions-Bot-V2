@@ -6054,7 +6054,7 @@ class MainBot(commands.Bot):
                 traceback.print_exc()
                 print(f"Failed to add cog: {name}")
 
-        # register scan-teams
+        # register scan-teams on this bot's tree for this guild
         self.tree.add_command(scan_teams, guild=guild_obj)
 
         # ---------- HTTP API for member + team count ----------
@@ -6082,14 +6082,20 @@ class MainBot(commands.Bot):
                 if isinstance(tx_ch, discord.TextChannel):
                     created_ids = set()
                     disbanded_ids = set()
+                    # scan recent history
                     async for msg in tx_ch.history(limit=500):
                         content = (msg.content or "").lower()
+
+                        # creation logs: "# New Team Created!" etc.
                         if "new team created" in content:
                             for role in msg.role_mentions:
                                 created_ids.add(role.id)
+
+                        # disband logs: "... HAS BEEN DISBANDED"
                         if "has been disbanded" in content:
                             for role in msg.role_mentions:
                                 disbanded_ids.add(role.id)
+
                     live_team_ids = created_ids - disbanded_ids
                     team_count = len(live_team_ids)
 
@@ -6107,7 +6113,6 @@ class MainBot(commands.Bot):
         self._web_runner = web.AppRunner(app)
         await self._web_runner.setup()
 
-        import os
         port = int(os.getenv("PORT", "8080"))  # Railway sets PORT
         site = web.TCPSite(self._web_runner, "0.0.0.0", port)
         await site.start()
