@@ -6101,10 +6101,15 @@ def _parse_doc_sections(html_text: str):
     return sections
 
 async def _fetch_doc_html(session: aiohttp.ClientSession):
-    async with session.get(DOC_EXPORT_URL, timeout=20) as r:
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    async with session.get(DOC_EXPORT_URL, headers=headers, timeout=20) as r:
         if r.status != 200:
-            raise RuntimeError(f"Doc fetch failed: {r.status}")
+            text = await r.text(errors="ignore")
+            raise RuntimeError(f"Doc fetch failed: {r.status} - {text[:200]!r}")
         return await r.text()
+
 
 async def options_handler(request: web.Request):
     resp = web.Response(status=204)
