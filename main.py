@@ -404,13 +404,6 @@ async def scan_teams(interaction: discord.Interaction):
         f"Registered {len(team_roles)} team role(s) into teams.json.",
         ephemeral=True,
     )
-# -------- create and run the bot --------
-bot = MainBot()
-
-@bot.event
-async def on_ready():
-    print(f"Logged in as {bot.user} (ID: {bot.user.id})")
-
 
 
 # ---------------- HELPERS ----------------
