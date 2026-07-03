@@ -6100,96 +6100,125 @@ class MainBot(commands.Bot):
             resp.headers["Access-Control-Allow-Origin"] = "*"
             return resp
 
-async def teams_handler(request: web.Request):
-    """GET /teams -> { teams: [ {id, name, color, logo_url, captain, executives, co_captains, members, founded} ] }"""
-    guild = self.get_guild(TEST_GUILD_ID)
-    if guild is None:
-        resp = web.json_response({"teams": []})
-        resp.headers["Access-Control-Allow-Origin"] = "*"
-        return resp
+        async def teams_handler(request: web.Request):
+            """
+            GET /teams -> {
+              teams: [
+                {
+                  id, name, color, logo_url,
+                  captain, executives, co_captains,
+                  members, founded
+                }
+              ]
+            }
+            """
+            guild = self.get_guild(TEST_GUILD_ID)
+            if guild is None:
+                resp = web.json_response({"teams": []})
+                resp.headers["Access-Control-Allow-Origin"] = "*"
+                return resp
 
-    raw_teams = load_teams()  # [{role_id, name}, ...]
-    teams_out = []
+            raw_teams = load_teams()  # [{role_id, name}, ...]
+            teams_out = []
 
-    for entry in raw_teams:
-        rid = entry.get("role_id")
-        if not rid:
-            continue
-        try:
-            rid_int = int(rid)
-        except (TypeError, ValueError):
-            continue
+            for entry in raw_teams:
+                rid = entry.get("role_id")
+                if not rid:
+                    continue
+                try:
+                    rid_int = int(rid)
+                except (TypeError, ValueError):
+                    continue
 
-        role = guild.get_role(rid_int)
-        if role is None:
-            continue  # deleted/disbanded
+                role = guild.get_role(rid_int)
+                if role is None:
+                    continue  # deleted/disbanded
 
-        # use your existing get_team_data
-        data = await get_team_data(role, guild)
+                data = await get_team_data(role, guild)
 
-        # captain mention -> name
-        captain_mention = data.get("captain") or "None"
-        captain_name = captain_mention
-        if captain_mention.startswith("<@") and captain_mention.endswith(">"):
-            try:
-                uid = int(captain_mention.strip("<@!>"))
-                m = guild.get_member(uid)
-                if m:
-                    captain_name = m.display_name
-            except Exception:
-                pass
+                # captain mention -> name
+                captain_mention = data.get("captain") or "None"
+                captain_name = captain_mention
+                if captain_mention.startswith("<@") and captain_mention.endswith(">"):
+                    try:
+                        uid = int(captain_mention.strip("<@!>"))
+                        m = guild.get_member(uid)
+                        if m:
+                            captain_name = m.display_name
+                    except Exception:
+                        pass
 
-        # executives -> list of display names
-        executives_names = []
-        for ex in data.get("executives", []):
-            try:
-                # if it's a Member
-                executives_names.append(ex.display_name)
-            except Exception:
-                # if it's a string mention or something else
-                executives_names.append(getattr(ex, "name", str(ex)))
+                # executive (single string) -> list of display names (0 or 1)
+                executives_names = []
+                exec_mention = data.get("executive")
+                if exec_mention and exec_mention != "None set":
+                    if isinstance(exec_mention, str) and exec_mention.startswith("<@") and exec_mention.endswith(">"):
+                        try:
+                            uid = int(exec_mention.strip("<@!>"))
+                            m = guild.get_member(uid)
+                            if m:
+                                executives_names.append(m.display_name)
+                            else:
+                                executives_names.append(exec_mention)
+                        except Exception:
+                            executives_names.append(exec_mention)
+                    else:
+                        executives_names.append(str(exec_mention))
 
-        # co-captains -> list of display names
-        co_captain_names = []
-        for c in data.get("co_captains", []):
-            try:
-                co_captain_names.append(c.display_name)
-            except Exception:
-                co_captain_names.append(getattr(c, "name", str(c)))
+                # co-captains -> list of display names
+                co_captain_names = []
+                for c in data.get("co_captains", []):
+                    try:
+                        # get_team_data currently stores mentions (strings); handle both cases
+                        if isinstance(c, discord.Member):
+                            co_captain_names.append(c.display_name)
+                        else:
+                            co_captain_names.append(str(c))
+                    except Exception:
+                        co_captain_names.append(str(c))
 
-        # players -> list of display names
-        member_names = []
-        for m in data.get("players", []):
-            try:
-                member_names.append(m.display_name)
-            except Exception:
-                member_names.append(getattr(m, "name", "Unknown"))
+                # players -> list of display names
+                member_names = []
+                for m in data.get("players", []):
+                    try:
+                        member_names.append(m.display_name)
+                    except Exception:
+                        member_names.append(getattr(m, "name", "Unknown"))
 
-        founded_iso = role.created_at.isoformat() if role.created_at else None
-        color_hex = f"#{role.colour.value:06x}" if role.colour else "#4b5563"
-        logo_url = None
-        try:
-            if role.icon:
-                logo_url = role.icon.url
-        except Exception:
-            logo_url = None
+                founded_iso = role.created_at.isoformat() if role.created_at else None
+                color_hex = f"#{role.colour.value:06x}" if role.colour else "#4b5563"
+                logo_url = None
+                try:
+                    if role.icon:
+                        logo_url = role.icon.url
+                except Exception:
+                    logo_url = None
 
-        teams_out.append({
-            "id": role.id,
-            "name": role.name,
-            "color": color_hex,
-            "logo_url": logo_url,
-            "captain": captain_name,
-            "executives": executives_names,     # NEW
-            "co_captains": co_captain_names,    # NEW
-            "members": member_names,
-            "founded": founded_iso,
-        })
+                teams_out.append({
+                    "id": role.id,
+                    "name": role.name,
+                    "color": color_hex,
+                    "logo_url": logo_url,
+                    "captain": captain_name,
+                    "executives": executives_names,
+                    "co_captains": co_captain_names,
+                    "members": member_names,
+                    "founded": founded_iso,
+                })
 
-    resp = web.json_response({"teams": teams_out})
-    resp.headers["Access-Control-Allow-Origin"] = "*"
-    return resp
+            resp = web.json_response({"teams": teams_out})
+            resp.headers["Access-Control-Allow-Origin"] = "*"
+            return resp
 
+        app.router.add_get("/member_count", member_count_handler)
+        app.router.add_get("/teams", teams_handler)
+
+        self._web_runner = web.AppRunner(app)
+        await self._web_runner.setup()
+        port = int(os.getenv("PORT", "8080"))
+        site = web.TCPSite(self._web_runner, "0.0.0.0", port)
+        await site.start()
+        print(f"Stats API running on port {port} at /member_count and /teams")
         # -------------------------------------------------------
 
         try:
