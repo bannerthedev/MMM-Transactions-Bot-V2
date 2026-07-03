@@ -860,17 +860,33 @@ class CreateTeamModal(discord.ui.Modal, title="Create Team"):
                     async with sess.get(pfp, timeout=15) as resp:
                         if resp.status == 200:
                             data = await resp.read()
+
+                            # Always try to create a custom emoji for this team
+                            try:
+                                safe_name = re.sub(r"[^0-9A-Za-z_]", "_", role.name)[:32] or "teamimg"
+                                created_emoji = await guild.create_custom_emoji(
+                                    name=safe_name,
+                                    image=data,
+                                    reason="Team pfp uploaded",
+                                )
+                            except Exception:
+                                created_emoji = None
+
+                            # Also try to set the role icon (if supported)
                             try:
                                 await role.edit(reason=f"Set team icon by {interaction.user}", icon=data)
                             except Exception:
+                                pass
+
+                            # If we successfully created an emoji, prepend it to the team role name
+                            if created_emoji:
                                 try:
-                                    created_emoji = await guild.create_custom_emoji(
-                                        name=re.sub(r"[^0-9A-Za-z_]", "_", role.name)[:32],
-                                        image=data,
-                                        reason="Team pfp uploaded"
-                                    )
+                                    # Example final name: :myteam: My Team
+                                    new_name = f"{created_emoji} {role.name}"
+                                    await role.edit(name=new_name, reason="Add team emoji prefix to role name")
                                 except Exception:
-                                    created_emoji = None
+                                    pass
+
             except Exception:
                 created_emoji = None
 
