@@ -476,7 +476,9 @@ async def get_team_data(team_role: discord.Role, guild: discord.Guild):
     members = [m for m in guild.members if team_role in m.roles and not m.bot]
     captain = None
     co_captains = []
+    executives = []
     players = []
+
     for m in members:
         if has_role_id(m, CAPTAIN_ROLE_ID):
             if not captain:
@@ -486,6 +488,7 @@ async def get_team_data(team_role: discord.Role, guild: discord.Guild):
             co_captains.append(m)
             continue
         if has_role_id(m, TEAM_EXEC_ROLE_ID):
+            executives.append(m)
             continue
         players.append(m)
 
@@ -506,11 +509,15 @@ async def get_team_data(team_role: discord.Role, guild: discord.Guild):
             # user not found -> clean it out
             remove_pending_invite(team_role.id, uid)
 
+    # Keep old 'executive' key for backwards compatibility (first exec or "None set")
+    executive_single = executives[0].mention if executives else "None set"
+
     return {
         "name": team_role.name,
-        "executive": "None set",
+        "executive": executive_single,              # old single field
+        "executives": executives,                   # NEW: list[Member]
         "captain": captain.mention if captain else "None",
-        "co_captains": [m.mention for m in co_captains],
+        "co_captains": [m for m in co_captains],    # list[Member]
         "players": players,
         "pending_invites": pending_mentions,
     }
@@ -6136,10 +6143,10 @@ class MainBot(commands.Bot):
 
                 data = await get_team_data(role, guild)
 
-                # captain mention -> name
+                # captain mention -> display name
                 captain_mention = data.get("captain") or "None"
                 captain_name = captain_mention
-                if captain_mention.startswith("<@") and captain_mention.endswith(">"):
+                if isinstance(captain_mention, str) and captain_mention.startswith("<@") and captain_mention.endswith(">"):
                     try:
                         uid = int(captain_mention.strip("<@!>"))
                         m = guild.get_member(uid)
@@ -6148,34 +6155,21 @@ class MainBot(commands.Bot):
                     except Exception:
                         pass
 
-                # executive (single string) -> list of display names (0 or 1)
+                # executives -> list of display names
                 executives_names = []
-                exec_mention = data.get("executive")
-                if exec_mention and exec_mention != "None set":
-                    if isinstance(exec_mention, str) and exec_mention.startswith("<@") and exec_mention.endswith(">"):
-                        try:
-                            uid = int(exec_mention.strip("<@!>"))
-                            m = guild.get_member(uid)
-                            if m:
-                                executives_names.append(m.display_name)
-                            else:
-                                executives_names.append(exec_mention)
-                        except Exception:
-                            executives_names.append(exec_mention)
-                    else:
-                        executives_names.append(str(exec_mention))
+                for ex in data.get("executives", []):
+                    try:
+                        executives_names.append(ex.display_name)
+                    except Exception:
+                        executives_names.append(getattr(ex, "name", str(ex)))
 
                 # co-captains -> list of display names
                 co_captain_names = []
                 for c in data.get("co_captains", []):
                     try:
-                        # get_team_data currently stores mentions (strings); handle both cases
-                        if isinstance(c, discord.Member):
-                            co_captain_names.append(c.display_name)
-                        else:
-                            co_captain_names.append(str(c))
+                        co_captain_names.append(c.display_name)
                     except Exception:
-                        co_captain_names.append(str(c))
+                        co_captain_names.append(getattr(c, "name", str(c)))
 
                 # players -> list of display names
                 member_names = []
@@ -6209,6 +6203,7 @@ class MainBot(commands.Bot):
             resp = web.json_response({"teams": teams_out})
             resp.headers["Access-Control-Allow-Origin"] = "*"
             return resp
+
 
         app.router.add_get("/member_count", member_count_handler)
         app.router.add_get("/teams", teams_handler)
