@@ -789,7 +789,7 @@ class CreateTeamModal(discord.ui.Modal, title="Create Team"):
             await interaction.response.send_message("Use this in a server.", ephemeral=True)
             return
 
-        # Defer early because we do network I/O and role/emoji creation
+        # Defer early (we do role/emoji creation and HTTP)
         try:
             await interaction.response.defer(ephemeral=True, thinking=True)
         except Exception:
@@ -801,11 +801,10 @@ class CreateTeamModal(discord.ui.Modal, title="Create Team"):
         raw = self.captain.value.strip()
         if raw.startswith("<@") and raw.endswith(">"):
             raw = raw.strip("<@!>")
-        member = None
         try:
             member = await guild.fetch_member(int(raw))
         except Exception:
-            pass
+            member = None
         if member is None:
             await interaction.followup.send("Could not find that captain.", ephemeral=True)
             return
@@ -822,7 +821,7 @@ class CreateTeamModal(discord.ui.Modal, title="Create Team"):
 
         plain_team_name = self.team_name.value
 
-        # Create role
+        # Create role with plain name only
         try:
             role = await guild.create_role(
                 name=plain_team_name,
@@ -843,7 +842,7 @@ class CreateTeamModal(discord.ui.Modal, title="Create Team"):
         except Exception as e:
             print(f"[CreateTeamModal] Failed to move role {role} under Team Player: {e}")
 
-        # Register team in teams.json using the plain name (no emoji)
+        # Register in teams.json with plain name
         add_team_to_list(role.id, plain_team_name)
 
         # Assign captain & team_player roles
@@ -851,9 +850,9 @@ class CreateTeamModal(discord.ui.Modal, title="Create Team"):
         cap_role = guild.get_role(CAPTAIN_ROLE_ID)
         if cap_role:
             roles_to_add.append(cap_role)
-        team_player_role = guild.get_role(TEAM_PLAYER_ROLE_ID)
         if team_player_role and team_player_role not in roles_to_add:
             roles_to_add.append(team_player_role)
+
         try:
             await member.add_roles(*roles_to_add, reason="New team created by admin")
         except Exception as e:
@@ -861,7 +860,7 @@ class CreateTeamModal(discord.ui.Modal, title="Create Team"):
             await interaction.followup.send("Team created but failed to assign roles.", ephemeral=True)
             return
 
-        # optional: process PFP URL -> emoji + role icon + emoji in role name
+        # optional: process PFP URL -> emoji + role icon, BUT keep role name plain
         pfp = (self.pfp_url.value or "").strip()
         created_emoji = None
         if pfp:
@@ -872,7 +871,7 @@ class CreateTeamModal(discord.ui.Modal, title="Create Team"):
                         if resp.status == 200:
                             data = await resp.read()
 
-                            # Create custom emoji
+                            # Try to create a custom emoji
                             try:
                                 safe_name = re.sub(r"[^0-9A-Za-z_]", "_", plain_team_name)[:32] or "teamimg"
                                 created_emoji = await guild.create_custom_emoji(
@@ -884,27 +883,23 @@ class CreateTeamModal(discord.ui.Modal, title="Create Team"):
                                 print(f"[CreateTeamModal] Failed to create emoji: {e}")
                                 created_emoji = None
 
-                            # Try to set role icon
+                            # Try to set the role icon (if supported)
                             try:
                                 await role.edit(reason=f"Set team icon by {interaction.user}", icon=data)
                             except Exception as e:
                                 print(f"[CreateTeamModal] Failed to set role icon: {e}")
-
-                            # Prefix emoji to role name, e.g. "<:name:id> Team Name"
-                            if created_emoji:
-                                try:
-                                    new_name = f"{created_emoji} {plain_team_name}"
-                                    await role.edit(name=new_name, reason="Add team emoji prefix to role name")
-                                except Exception as e:
-                                    print(f"[CreateTeamModal] Failed to rename role with emoji: {e}")
             except Exception as e:
                 print(f"[CreateTeamModal] Failed PFP handling: {e}")
                 created_emoji = None
 
-        # log and notify
+        # Log and notify
         if tx:
             try:
-                await tx.send(f"# New Team Created!\n* Team Name: {role.mention}\n* Team Captain: {member.mention}")
+                await tx.send(
+                    f"# New Team Created!\n"
+                    f"* Team Name: {role.mention}\n"
+                    f"* Team Captain: {member.mention}"
+                )
             except Exception:
                 pass
 
