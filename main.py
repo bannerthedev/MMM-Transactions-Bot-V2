@@ -6087,6 +6087,248 @@ class MainBot(commands.Bot):
         # register scan-teams on this bot's tree for this guild
         self.tree.add_command(scan_teams, guild=guild_obj)
 
+
+
+
+# require: pip install beautifulsoup4
+import bs4
+from bs4 import BeautifulSoup
+
+GOOGLE_DOC_ID = "15C61xZ9CJOYD94Mk4JSTBb0O3nSXR6u_KIQEIHxbuE8"
+DOC_EXPORT_URL = f"https://docs.google.com/document/d/{GOOGLE_DOC_ID}/export?format=html"
+
+def _build_id_from_title(title: str) -> str:
+    id_ = re.sub(r"[^\w\- ]+", "", title).strip().lower().replace(" ", "-")
+    return id_ or "section"
+
+def _parse_doc_sections(html_text: str):
+    soup = BeautifulSoup(html_text, "html.parser")
+    body = soup.body or soup
+
+    headings = body.find_all(re.compile(r"^h[1-6]$"))
+    sections = []
+
+    if headings:
+        for idx, h in enumerate(headings):
+            level = int(h.name[1])
+            title = h.get_text().strip()
+            sect_id = f"{_build_id_from_title(title)}-{idx}"
+            html_parts = []
+            for sib in h.next_siblings:
+                if isinstance(sib, str):
+                    continue
+                if sib.name and re.match(r"^h[1-6]$", sib.name):
+                    if int(sib.name[1]) <= level:
+                        break
+                html_parts.append(str(sib))
+            sections.append({"id": sect_id, "title": title, "html": "".join(html_parts)})
+    else:
+        paras = body.find_all("p")
+        idx = 0
+        i = 0
+        while i < len(paras):
+            p = paras[i]
+            strong = p.find("b")
+            if strong and strong.get_text().strip():
+                title = strong.get_text().strip()
+                sect_id = f"{_build_id_from_title(title)}-{idx}"
+                idx += 1
+                html_parts = []
+                j = i + 1
+                while j < len(paras):
+                    nextp = paras[j]
+                    nextstrong = nextp.find("b")
+                    if nextstrong and nextstrong.get_text().strip():
+                        break
+                    html_parts.append(str(nextp))
+                    j += 1
+                sections.append({"id": sect_id, "title": title, "html": "".join(html_parts)})
+                i = j
+            else:
+                i += 1
+
+    if not sections:
+        sections = [{"id": "rules-all", "title": "Rules", "html": str(body)}]
+    return sections
+
+async def _fetch_doc_html(session: aiohttp.ClientSession):
+    async with session.get(DOC_EXPORT_URL, timeout=20) as r:
+        if r.status != 200:
+            raise RuntimeError(f"Doc fetch failed: {r.status}")
+        return await r.text()
+
+async def options_handler(request: web.Request):
+    resp = web.Response(status=204)
+    resp.headers["Access-Control-Allow-Origin"] = "*"
+    resp.headers["Access-Control-Allow-Methods"] = "GET,POST,OPTIONS"
+    resp.headers["Access-Control-Allow-Headers"] = "Content-Type,X-API-Key"
+    return resp
+
+async def start_web_api():
+    app = web.Application()
+
+    # member_count (ported)
+    async def member_count_handler(request: web.Request):
+        guild = bot.get_guild(TEST_GUILD_ID)
+        member_count = guild.member_count if guild else 0
+        online_count = 0
+        if guild is not None:
+            for m in guild.members:
+                if m.bot:
+                    continue
+                if m.status != discord.Status.offline:
+                    online_count += 1
+
+        team_count = 0
+        if guild is not None:
+            tx_ch = guild.get_channel(TRANSACTIONS_CHANNEL_ID)
+            if isinstance(tx_ch, discord.TextChannel):
+                created_ids = set()
+                disbanded_ids = set()
+                async for msg in tx_ch.history(limit=500):
+                    content = (msg.content or "").lower()
+                    if "new team created" in content:
+                        for role in msg.role_mentions:
+                            created_ids.add(role.id)
+                    if "has been disbanded" in content:
+                        for role in msg.role_mentions:
+                            disbanded_ids.add(role.id)
+                live_team_ids = created_ids - disbanded_ids
+                team_count = len(live_team_ids)
+
+        data = {"member_count": member_count, "team_count": team_count, "online_count": online_count}
+        resp = web.json_response(data)
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        return resp
+
+    # teams (ported)
+    async def teams_handler(request: web.Request):
+        guild = bot.get_guild(TEST_GUILD_ID)
+        if guild is None:
+            resp = web.json_response({"teams": []})
+            resp.headers["Access-Control-Allow-Origin"] = "*"
+            return resp
+
+        raw_teams = load_teams()
+        teams_out = []
+        for entry in raw_teams:
+            rid = entry.get("role_id")
+            if not rid:
+                continue
+            try:
+                rid_int = int(rid)
+            except (TypeError, ValueError):
+                continue
+            role = guild.get_role(rid_int)
+            if role is None:
+                continue
+            data = await get_team_data(role, guild)
+
+            # captain
+            captain_mention = data.get("captain") or "None"
+            captain_name = captain_mention
+            if isinstance(captain_mention, str) and captain_mention.startswith("<@") and captain_mention.endswith(">"):
+                try:
+                    uid = int(captain_mention.strip("<@!>"))
+                    m = guild.get_member(uid)
+                    if m:
+                        captain_name = m.display_name
+                except Exception:
+                    pass
+
+            executives_names = []
+            for ex in data.get("executives", []):
+                try:
+                    executives_names.append(ex.display_name)
+                except Exception:
+                    executives_names.append(getattr(ex, "name", str(ex)))
+
+            co_captain_names = []
+            for c in data.get("co_captains", []):
+                try:
+                    co_captain_names.append(c.display_name)
+                except Exception:
+                    co_captain_names.append(getattr(c, "name", str(c)))
+
+            member_names = []
+            for m in data.get("players", []):
+                try:
+                    member_names.append(m.display_name)
+                except Exception:
+                    member_names.append(getattr(m, "name", "Unknown"))
+
+            founded_iso = role.created_at.isoformat() if role.created_at else None
+            color_hex = f"#{role.colour.value:06x}" if role.colour else "#4b5563"
+            logo_url = None
+            try:
+                if role.icon:
+                    logo_url = role.icon.url
+            except Exception:
+                logo_url = None
+
+            teams_out.append({
+                "id": role.id, "name": role.name, "color": color_hex, "logo_url": logo_url,
+                "captain": captain_name, "executives": executives_names, "co_captains": co_captain_names,
+                "members": member_names, "founded": founded_iso,
+            })
+
+        resp = web.json_response({"teams": teams_out})
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        return resp
+
+    # simple tickets/messages handler (if used)
+    async def web_messages_handler(request: web.Request):
+        session_id = request.query.get("session_id")
+        if not session_id:
+            resp = web.json_response({"messages": [], "next_index": 0})
+            resp.headers["Access-Control-Allow-Origin"] = "*"
+            return resp
+        try:
+            since = int(request.query.get("since", "0"))
+        except Exception:
+            since = 0
+        msgs, new_idx = get_messages_since(session_id, since) if 'get_messages_since' in globals() else ([], 0)
+        resp = web.json_response({"messages": msgs, "next_index": new_idx})
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        return resp
+
+    # rules endpoint: fetch Google Doc export and parse sections
+    async def rules_handler(request: web.Request):
+        try:
+            async with aiohttp.ClientSession() as sess:
+                html_text = await _fetch_doc_html(sess)
+            sections = _parse_doc_sections(html_text)
+            resp = web.json_response({"sections": sections})
+            resp.headers["Access-Control-Allow-Origin"] = "*"
+            return resp
+        except Exception as e:
+            resp = web.json_response({"error": str(e)}, status=500)
+            resp.headers["Access-Control-Allow-Origin"] = "*"
+            return resp
+
+    # register routes + OPTIONS for CORS
+    app.router.add_get("/member_count", member_count_handler)
+    app.router.add_get("/teams", teams_handler)
+    app.router.add_get("/rules", rules_handler)
+    app.router.add_get("/tickets/messages", web_messages_handler)
+
+    app.router.add_route("OPTIONS", "/member_count", options_handler)
+    app.router.add_route("OPTIONS", "/teams", options_handler)
+    app.router.add_route("OPTIONS", "/rules", options_handler)
+    app.router.add_route("OPTIONS", "/tickets/messages", options_handler)
+
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.getenv("PORT", "8080"))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    print(f"Web API running on port {port} (/member_count, /teams, /rules, /tickets/messages)")
+
+
+
+
+
+        
         # ---------- HTTP API for member + team count ----------
         app = web.Application()
 
