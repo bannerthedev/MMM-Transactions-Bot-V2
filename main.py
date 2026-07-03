@@ -6060,7 +6060,7 @@ class MainBot(commands.Bot):
                 traceback.print_exc()
                 print(f"Failed to add cog: {name}")
 
-        # register scan-teams on this bot's tree for this guild
+        # register scan-teams
         self.tree.add_command(scan_teams, guild=guild_obj)
 
         try:
@@ -6128,25 +6128,7 @@ bot = MainBot()
 
 @bot.event
 async def on_ready():
-    print(f"Logged in as {bot.user} ({bot.user.id})")
-
-    guild_obj = discord.Object(id=TEST_GUILD_ID)
-
-    # Sync commands to this guild
-    try:
-        await bot.tree.sync(guild=guild_obj)
-        print(f"Slash commands synced for guild {TEST_GUILD_ID}.")
-    except Exception as e:
-        print("Failed to sync slash commands:", e)
-
-    # Debug: list all commands registered for this guild
-    try:
-        cmds = bot.tree.get_commands(guild=guild_obj)
-        print("Commands in tree for this guild:")
-        for cmd in cmds:
-            print(" -", cmd.name)
-    except Exception as e:
-        print("Failed to list commands:", e)
+    print(f"Logged in as {bot.user} (ID: {bot.user.id})")
 
 if __name__ == "__main__":
     bot.run(os.getenv("BOT_TOKEN"))
