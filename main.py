@@ -5839,6 +5839,62 @@ class RescrimCog(commands.Cog):
 
 
 
+@bot.tree.command(name="scan-teams", description="Admin: register existing team roles into teams.json")
+@app_commands.guilds(discord.Object(id=TEST_GUILD_ID))  # your league guild id
+@app_commands.default_permissions(administrator=True)
+async def scan_teams(interaction: discord.Interaction):
+    guild = interaction.guild
+    if guild is None:
+        await interaction.response.send_message("Use this in a server.", ephemeral=True)
+        return
+
+    # Pick which roles count as teams. Example: any role above TEAM_PLAYER_ROLE_ID and below some marker,
+    # or just manually list them here.
+    team_roles = []
+    for role in guild.roles:
+        # simple heuristic: skip @everyone, managed, and known system roles
+        if role.is_default() or role.managed:
+            continue
+        if role.id in {MOD_ROLE_ID, TRIAL_MOD_ROLE_ID}:
+            continue
+        # TODO: adjust this to match how you distinguish team roles
+        if "team" in role.name.lower() or "clan" in role.name.lower():
+            team_roles.append(role)
+
+    if not team_roles:
+        await interaction.response.send_message("No candidate team roles found by scan.", ephemeral=True)
+        return
+
+    from pathlib import Path
+    import json
+
+    existing = []
+    if TEAMS_FILE.is_file():
+        try:
+            existing = json.loads(TEAMS_FILE.read_text("utf-8"))
+        except Exception:
+            existing = []
+    if not isinstance(existing, list):
+        existing = []
+
+    # merge
+    for r in team_roles:
+        if not any(str(e.get("role_id")) == str(r.id) for e in existing):
+            existing.append({"role_id": r.id, "name": r.name})
+
+    try:
+        TEAMS_FILE.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+    except Exception as e:
+        await interaction.response.send_message(f"Failed to write teams.json: `{e}`", ephemeral=True)
+        return
+
+    await interaction.response.send_message(
+        f"Registered {len(team_roles)} team role(s) into teams.json.",
+        ephemeral=True,
+    )
+
+
+
 
 # ---------------- Admin command: delete scheduling channels ----------------
 class SchedulingAdmin(commands.Cog):
