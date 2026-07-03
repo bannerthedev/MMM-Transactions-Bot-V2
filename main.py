@@ -11,6 +11,8 @@ from typing import Optional
 from dotenv import load_dotenv
 import aiohttp
 import xml.etree.ElementTree as ET
+import bs4
+from bs4 import BeautifulSoup
 
 import discord
 from discord.ext import commands
@@ -6037,61 +6039,8 @@ class SchedulingAdmin(commands.Cog):
             pass
 
 
-# ---------------- BOT SETUP ----------------
-class MainBot(commands.Bot):
-    def __init__(self):
-        super().__init__(command_prefix="!", intents=INTENTS)
-        self._web_runner: web.AppRunner | None = None
-
-    async def setup_hook(self):
-        guild_obj = Object(id=TEST_GUILD_ID)
-
-        cog_names = [
-            "SettingsCog",
-            "AdminPanel",
-            "ManageTeam",
-            "DoneCommand",
-            "RosterCog",
-            "InfoCommands",
-            "AdminManage",
-            "FAQBracketCog",
-            "StandingCog",
-            "SchedulingAdmin",
-            "BracketAdmin",
-            "LeaveCog",
-            "AutoDisbandScrim",
-            "SaySomethingCog",
-            "ForceTimeCog",
-            "CommandGuideCog",
-            "YouTubePollerCog",
-            "AutoCodeCog",
-            "HeadsetInfoCog",
-            "ServerStatsCog",
-            "TeamRoleAutoOrderCog",
-            "RescrimCog",
-            "RoleOrderFixCog",
-        ]
-        for name in cog_names:
-            cls = globals().get(name)
-            if cls is None:
-                print(f"Skipping cog {name}: not defined")
-                continue
-            try:
-                await self.add_cog(cls(self))
-                print(f"Added cog: {name}")
-            except Exception:
-                import traceback
-                traceback.print_exc()
-                print(f"Failed to add cog: {name}")
-
-        # register scan-teams on this bot's tree for this guild
-        self.tree.add_command(scan_teams, guild=guild_obj)
-
-
-
-
-# require: pip install beautifulsoup4
-import bs4
+# ---------- Web API helpers (module-level) ----------
+# Requires: pip install beautifulsoup4
 from bs4 import BeautifulSoup
 
 GOOGLE_DOC_ID = "15C61xZ9CJOYD94Mk4JSTBb0O3nSXR6u_KIQEIHxbuE8"
@@ -6167,7 +6116,7 @@ async def options_handler(request: web.Request):
 async def start_web_api():
     app = web.Application()
 
-    # member_count (ported)
+    # /member_count
     async def member_count_handler(request: web.Request):
         guild = bot.get_guild(TEST_GUILD_ID)
         member_count = guild.member_count if guild else 0
@@ -6201,7 +6150,7 @@ async def start_web_api():
         resp.headers["Access-Control-Allow-Origin"] = "*"
         return resp
 
-    # teams (ported)
+    # /teams
     async def teams_handler(request: web.Request):
         guild = bot.get_guild(TEST_GUILD_ID)
         if guild is None:
@@ -6224,7 +6173,6 @@ async def start_web_api():
                 continue
             data = await get_team_data(role, guild)
 
-            # captain
             captain_mention = data.get("captain") or "None"
             captain_name = captain_mention
             if isinstance(captain_mention, str) and captain_mention.startswith("<@") and captain_mention.endswith(">"):
@@ -6276,7 +6224,7 @@ async def start_web_api():
         resp.headers["Access-Control-Allow-Origin"] = "*"
         return resp
 
-    # simple tickets/messages handler (if used)
+    # /tickets/messages (optional)
     async def web_messages_handler(request: web.Request):
         session_id = request.query.get("session_id")
         if not session_id:
@@ -6292,7 +6240,7 @@ async def start_web_api():
         resp.headers["Access-Control-Allow-Origin"] = "*"
         return resp
 
-    # rules endpoint: fetch Google Doc export and parse sections
+    # /rules
     async def rules_handler(request: web.Request):
         try:
             async with aiohttp.ClientSession() as sess:
@@ -6306,7 +6254,7 @@ async def start_web_api():
             resp.headers["Access-Control-Allow-Origin"] = "*"
             return resp
 
-    # register routes + OPTIONS for CORS
+    # register routes and CORS
     app.router.add_get("/member_count", member_count_handler)
     app.router.add_get("/teams", teams_handler)
     app.router.add_get("/rules", rules_handler)
@@ -6325,161 +6273,58 @@ async def start_web_api():
     print(f"Web API running on port {port} (/member_count, /teams, /rules, /tickets/messages)")
 
 
+# ---------------- BOT SETUP ----------------
+class MainBot(commands.Bot):
+    def __init__(self):
+        super().__init__(command_prefix="!", intents=INTENTS)
+        self._web_runner: web.AppRunner | None = None
 
+    async def setup_hook(self):
+        guild_obj = Object(id=TEST_GUILD_ID)
 
+        cog_names = [
+            "SettingsCog",
+            "AdminPanel",
+            "ManageTeam",
+            "DoneCommand",
+            "RosterCog",
+            "InfoCommands",
+            "AdminManage",
+            "FAQBracketCog",
+            "StandingCog",
+            "SchedulingAdmin",
+            "BracketAdmin",
+            "LeaveCog",
+            "AutoDisbandScrim",
+            "SaySomethingCog",
+            "ForceTimeCog",
+            "CommandGuideCog",
+            "YouTubePollerCog",
+            "AutoCodeCog",
+            "HeadsetInfoCog",
+            "ServerStatsCog",
+            "TeamRoleAutoOrderCog",
+            "RescrimCog",
+            "RoleOrderFixCog",
+        ]
+        for name in cog_names:
+            cls = globals().get(name)
+            if cls is None:
+                print(f"Skipping cog {name}: not defined")
+                continue
+            try:
+                await self.add_cog(cls(self))
+                print(f"Added cog: {name}")
+            except Exception:
+                import traceback
+                traceback.print_exc()
+                print(f"Failed to add cog: {name}")
 
-        
-        # ---------- HTTP API for member + team count ----------
-        app = web.Application()
+        # register scan-teams on this bot's tree for this guild
+        self.tree.add_command(scan_teams, guild=guild_obj)
 
-        async def member_count_handler(request: web.Request):
-            guild = self.get_guild(TEST_GUILD_ID)
-
-            member_count = guild.member_count if guild else 0
-
-            online_count = 0
-            if guild is not None:
-                for m in guild.members:
-                    if m.bot:
-                        continue
-                    if m.status != discord.Status.offline:
-                        online_count += 1
-
-            # team_count from transactions channel logs
-            team_count = 0
-            if guild is not None:
-                tx_ch = guild.get_channel(TRANSACTIONS_CHANNEL_ID)
-                if isinstance(tx_ch, discord.TextChannel):
-                    created_ids = set()
-                    disbanded_ids = set()
-                    async for msg in tx_ch.history(limit=500):
-                        content = (msg.content or "").lower()
-                        if "new team created" in content:
-                            for role in msg.role_mentions:
-                                created_ids.add(role.id)
-                        if "has been disbanded" in content:
-                            for role in msg.role_mentions:
-                                disbanded_ids.add(role.id)
-                    live_team_ids = created_ids - disbanded_ids
-                    team_count = len(live_team_ids)
-
-            data = {
-                "member_count": member_count,
-                "team_count": team_count,
-                "online_count": online_count,
-            }
-            resp = web.json_response(data)
-            resp.headers["Access-Control-Allow-Origin"] = "*"
-            return resp
-
-        async def teams_handler(request: web.Request):
-            """
-            GET /teams -> {
-              teams: [
-                {
-                  id, name, color, logo_url,
-                  captain, executives, co_captains,
-                  members, founded
-                }
-              ]
-            }
-            """
-            guild = self.get_guild(TEST_GUILD_ID)
-            if guild is None:
-                resp = web.json_response({"teams": []})
-                resp.headers["Access-Control-Allow-Origin"] = "*"
-                return resp
-
-            raw_teams = load_teams()  # [{role_id, name}, ...]
-            teams_out = []
-
-            for entry in raw_teams:
-                rid = entry.get("role_id")
-                if not rid:
-                    continue
-                try:
-                    rid_int = int(rid)
-                except (TypeError, ValueError):
-                    continue
-
-                role = guild.get_role(rid_int)
-                if role is None:
-                    continue  # deleted/disbanded
-
-                data = await get_team_data(role, guild)
-
-                # captain mention -> display name
-                captain_mention = data.get("captain") or "None"
-                captain_name = captain_mention
-                if isinstance(captain_mention, str) and captain_mention.startswith("<@") and captain_mention.endswith(">"):
-                    try:
-                        uid = int(captain_mention.strip("<@!>"))
-                        m = guild.get_member(uid)
-                        if m:
-                            captain_name = m.display_name
-                    except Exception:
-                        pass
-
-                # executives -> list of display names
-                executives_names = []
-                for ex in data.get("executives", []):
-                    try:
-                        executives_names.append(ex.display_name)
-                    except Exception:
-                        executives_names.append(getattr(ex, "name", str(ex)))
-
-                # co-captains -> list of display names
-                co_captain_names = []
-                for c in data.get("co_captains", []):
-                    try:
-                        co_captain_names.append(c.display_name)
-                    except Exception:
-                        co_captain_names.append(getattr(c, "name", str(c)))
-
-                # players -> list of display names
-                member_names = []
-                for m in data.get("players", []):
-                    try:
-                        member_names.append(m.display_name)
-                    except Exception:
-                        member_names.append(getattr(m, "name", "Unknown"))
-
-                founded_iso = role.created_at.isoformat() if role.created_at else None
-                color_hex = f"#{role.colour.value:06x}" if role.colour else "#4b5563"
-                logo_url = None
-                try:
-                    if role.icon:
-                        logo_url = role.icon.url
-                except Exception:
-                    logo_url = None
-
-                teams_out.append({
-                    "id": role.id,
-                    "name": role.name,
-                    "color": color_hex,
-                    "logo_url": logo_url,
-                    "captain": captain_name,
-                    "executives": executives_names,
-                    "co_captains": co_captain_names,
-                    "members": member_names,
-                    "founded": founded_iso,
-                })
-
-            resp = web.json_response({"teams": teams_out})
-            resp.headers["Access-Control-Allow-Origin"] = "*"
-            return resp
-
-
-        app.router.add_get("/member_count", member_count_handler)
-        app.router.add_get("/teams", teams_handler)
-
-        self._web_runner = web.AppRunner(app)
-        await self._web_runner.setup()
-        port = int(os.getenv("PORT", "8080"))
-        site = web.TCPSite(self._web_runner, "0.0.0.0", port)
-        await site.start()
-        print(f"Stats API running on port {port} at /member_count and /teams")
-        # -------------------------------------------------------
+        # start web API in background
+        self.loop.create_task(start_web_api())
 
         try:
             await self.tree.sync(guild=guild_obj)
