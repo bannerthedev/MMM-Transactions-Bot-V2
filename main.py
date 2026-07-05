@@ -6099,14 +6099,17 @@ def _parse_doc_sections(html_text: str):
 
 async def _fetch_doc_html(session: aiohttp.ClientSession):
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0.0.0 Safari/537.36"
+        )
     }
     async with session.get(DOC_EXPORT_URL, headers=headers, timeout=20) as r:
         if r.status != 200:
             text = await r.text(errors="ignore")
             raise RuntimeError(f"Doc fetch failed: {r.status} - {text[:200]!r}")
         return await r.text()
-
 
 async def options_handler(request: web.Request):
     resp = web.Response(status=204)
@@ -6118,10 +6121,12 @@ async def options_handler(request: web.Request):
 async def start_web_api():
     app = web.Application()
 
-    # /member_count
+    # /member_count (NOW includes status: Bracket / Seeding / Idle)
     async def member_count_handler(request: web.Request):
         guild = bot.get_guild(TEST_GUILD_ID)
+
         member_count = guild.member_count if guild else 0
+
         online_count = 0
         if guild is not None:
             for m in guild.members:
@@ -6130,6 +6135,7 @@ async def start_web_api():
                 if m.status != discord.Status.offline:
                     online_count += 1
 
+        # team_count from transactions channel logs
         team_count = 0
         if guild is not None:
             tx_ch = guild.get_channel(TRANSACTIONS_CHANNEL_ID)
@@ -6147,7 +6153,47 @@ async def start_web_api():
                 live_team_ids = created_ids - disbanded_ids
                 team_count = len(live_team_ids)
 
-        data = {"member_count": member_count, "team_count": team_count, "online_count": online_count}
+        # ---- STATUS logic: Bracket vs Seeding vs Idle ----
+        status = "Idle"
+        bracket_ts = None
+        seeding_ts = None
+
+        if guild is not None:
+            # last message time in bracket channel
+            try:
+                br_ch = guild.get_channel(BRACKET_CHANNEL_ID)
+                if isinstance(br_ch, discord.TextChannel):
+                    br_msg = None
+                    async for m in br_ch.history(limit=1):
+                        br_msg = m
+                    if br_msg:
+                        bracket_ts = br_msg.created_at
+            except Exception:
+                pass
+
+            # last message time in seeding points channel
+            try:
+                sd_ch = guild.get_channel(SEEDING_POINTS_CHANNEL_ID)
+                if isinstance(sd_ch, discord.TextChannel):
+                    sd_msg = None
+                    async for m in sd_ch.history(limit=1):
+                        sd_msg = m
+                    if sd_msg:
+                        seeding_ts = sd_msg.created_at
+            except Exception:
+                pass
+
+        if bracket_ts and (not seeding_ts or bracket_ts > seeding_ts):
+            status = "Bracket"
+        elif seeding_ts:
+            status = "Seeding"
+
+        data = {
+            "member_count": member_count,
+            "team_count": team_count,
+            "online_count": online_count,
+            "status": status,  # NEW
+        }
         resp = web.json_response(data)
         resp.headers["Access-Control-Allow-Origin"] = "*"
         return resp
@@ -6162,6 +6208,7 @@ async def start_web_api():
 
         raw_teams = load_teams()
         teams_out = []
+
         for entry in raw_teams:
             rid = entry.get("role_id")
             if not rid:
@@ -6170,9 +6217,11 @@ async def start_web_api():
                 rid_int = int(rid)
             except (TypeError, ValueError):
                 continue
+
             role = guild.get_role(rid_int)
             if role is None:
                 continue
+
             data = await get_team_data(role, guild)
 
             captain_mention = data.get("captain") or "None"
@@ -6217,30 +6266,18 @@ async def start_web_api():
                 logo_url = None
 
             teams_out.append({
-                "id": role.id, "name": role.name, "color": color_hex, "logo_url": logo_url,
-                "captain": captain_name, "executives": executives_names, "co_captains": co_captain_names,
-                "members": member_names, "founded": founded_iso,
+                "id": role.id,
+                "name": role.name,
+                "color": color_hex,
+                "logo_url": logo_url,
+                "captain": captain_name,
+                "executives": executives_names,
+                "co_captains": co_captain_names,
+                "members": member_names,
+                "founded": founded_iso,
             })
 
         resp = web.json_response({"teams": teams_out})
-        resp.headers["Access-Control-Allow-Origin"] = "*"
-        return resp
-
-    # /tickets/messages (safe fallback)
-    async def web_messages_handler(request: web.Request):
-        # If you have get_messages_since implemented elsewhere, call it here.
-        # For now return empty result so endpoint always works.
-        session_id = request.query.get("session_id")
-        if not session_id:
-            resp = web.json_response({"messages": [], "next_index": 0})
-            resp.headers["Access-Control-Allow-Origin"] = "*"
-            return resp
-        try:
-            since = int(request.query.get("since", "0"))
-        except Exception:
-            since = 0
-        # no message store available -> empty response
-        resp = web.json_response({"messages": [], "next_index": 0})
         resp.headers["Access-Control-Allow-Origin"] = "*"
         return resp
 
@@ -6258,23 +6295,21 @@ async def start_web_api():
             resp.headers["Access-Control-Allow-Origin"] = "*"
             return resp
 
-    # register routes and CORS
+    # routes + CORS
     app.router.add_get("/member_count", member_count_handler)
     app.router.add_get("/teams", teams_handler)
     app.router.add_get("/rules", rules_handler)
-    app.router.add_get("/tickets/messages", web_messages_handler)
 
     app.router.add_route("OPTIONS", "/member_count", options_handler)
     app.router.add_route("OPTIONS", "/teams", options_handler)
     app.router.add_route("OPTIONS", "/rules", options_handler)
-    app.router.add_route("OPTIONS", "/tickets/messages", options_handler)
 
     runner = web.AppRunner(app)
     await runner.setup()
     port = int(os.getenv("PORT", "8080"))
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    print(f"Web API running on port {port} (/member_count, /teams, /rules, /tickets/messages)")
+    print(f"Web API running on port {port} (/member_count, /teams, /rules)")
 
 
 # ---------------- BOT SETUP ----------------
