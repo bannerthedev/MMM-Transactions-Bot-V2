@@ -38,6 +38,13 @@ SEEDING_POINTS_CHANNEL_ID = 1453096022292168947  # <- replace 0 with your seedin
 # Force-time review channel (staff-only announcement)
 FORCE_TIME_REVIEW_CHANNEL_ID = 1516147710112174151
 
+DISCORD_CLIENT_ID = os.getenv("1521554156840554607")
+DISCORD_CLIENT_SECRET = os.getenv("-E2Bt2-Dhn_pJXBVN_xh_oytp01Sb2V0")
+DISCORD_REDIRECT_URI = os.getenv("https://mmm-transactions-bot-v2-production.up.railway.app/auth/discord/callback")
+SESSION_SECRET = os.getenv("SESSION_SECRET", "change-me")
+
+ALLOWED_ROLE_IDS = {1487870937201246498, 1487869639244382240, 1338478126354923530, 1487869844077412497, 1356887381156036688}
+
 # YouTube monitoring (set the channel IDs you want to use)
 YOUTUBE_SOURCE_CHANNEL_ID = 123456789012345678  # ID of that feed channel
 YOUTUBE_LIVE_DEST_CHANNEL_ID = 1516677717561708605     # lives
@@ -468,6 +475,70 @@ def get_user_team_role(member: discord.Member) -> discord.Role | None:
 
     # If exactly one team role matches, return it; otherwise None
     return team_roles[0] if len(team_roles) == 1 else None
+
+
+
+
+
+import secrets
+import hashlib
+import hmac
+import base64
+from urllib.parse import urlencode
+
+_SESSIONS: dict[str, dict] = {}  # session_id -> {user_id:int, ok:bool, ts:float}
+
+def _sign(val: str) -> str:
+    sig = hmac.new(SESSION_SECRET.encode(), val.encode(), hashlib.sha256).digest()
+    return base64.urlsafe_b64encode(sig).decode().rstrip("=")
+
+def _make_cookie(session_id: str) -> str:
+    return f"{session_id}.{_sign(session_id)}"
+
+def _verify_cookie(cookie_val: str) -> str | None:
+    try:
+        session_id, sig = cookie_val.split(".", 1)
+        if hmac.compare_digest(_sign(session_id), sig):
+            return session_id
+    except Exception:
+        return None
+    return None
+
+async def discord_exchange_code(code: str) -> str:
+    token_url = "https://discord.com/api/oauth2/token"
+    data = {
+        "client_id": DISCORD_CLIENT_ID,
+        "client_secret": DISCORD_CLIENT_SECRET,
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": DISCORD_REDIRECT_URI,
+    }
+    headers = {"Content-Type": "application/x-www-form-urlencoded"}
+    async with aiohttp.ClientSession() as sess:
+        async with sess.post(token_url, data=data, headers=headers) as r:
+            j = await r.json()
+            return j["access_token"]
+
+async def discord_get_user(access_token: str) -> dict:
+    async with aiohttp.ClientSession() as sess:
+        async with sess.get(
+            "https://discord.com/api/users/@me",
+            headers={"Authorization": f"Bearer {access_token}"},
+        ) as r:
+            return await r.json()
+
+async def discord_get_member_roles(access_token: str, guild_id: int, user_id: int) -> set[int]:
+    # requires OAuth scope: guilds.members.read
+    url = f"https://discord.com/api/users/@me/guilds/{guild_id}/member"
+    async with aiohttp.ClientSession() as sess:
+        async with sess.get(url, headers={"Authorization": f"Bearer {access_token}"}) as r:
+            data = await r.json()
+            role_ids = data.get("roles") or []
+            return {int(x) for x in role_ids if str(x).isdigit()}
+
+
+
+
 
 
 def find_single_team_for_member(guild: discord.Guild, member: discord.Member) -> Optional[discord.Role]:
@@ -6295,6 +6366,62 @@ async def start_web_api():
             resp.headers["Access-Control-Allow-Origin"] = "*"
             return resp
 
+
+
+async def auth_login(request: web.Request):
+    # scopes needed to read their guild member roles
+    scope = "identify guilds.members.read"
+    params = {
+        "client_id": DISCORD_CLIENT_ID,
+        "redirect_uri": DISCORD_REDIRECT_URI,
+        "response_type": "code",
+        "scope": scope,
+        "prompt": "none",
+    }
+    url = "https://discord.com/api/oauth2/authorize?" + urlencode(params)
+    raise web.HTTPFound(url)
+
+async def auth_callback(request: web.Request):
+    code = request.query.get("code")
+    if not code:
+        raise web.HTTPFound("/auth/discord/failed")
+
+    try:
+        access_token = await discord_exchange_code(code)
+        user = await discord_get_user(access_token)
+        user_id = int(user["id"])
+        roles = await discord_get_member_roles(access_token, TEST_GUILD_ID, user_id)
+
+        ok = bool(roles & ALLOWED_ROLE_IDS)
+
+        session_id = secrets.token_urlsafe(24)
+        _SESSIONS[session_id] = {"user_id": user_id, "ok": ok, "ts": datetime.utcnow().timestamp()}
+
+        resp = web.HTTPFound("/auth/discord/success" if ok else "/auth/discord/denied")
+        # cookie for your website to use
+        cookie_val = _make_cookie(session_id)
+        resp.set_cookie("mmm_media", cookie_val, httponly=True, secure=True, samesite="Lax", max_age=60*60*6)
+        return resp
+    except Exception as e:
+        print("auth_callback error:", e)
+        raise web.HTTPFound("/auth/discord/failed")
+
+async def auth_me(request: web.Request):
+    cookie = request.cookies.get("mmm_media")
+    sid = _verify_cookie(cookie) if cookie else None
+    if not sid or sid not in _SESSIONS:
+        resp = web.json_response({"ok": False})
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        return resp
+
+    s = _SESSIONS[sid]
+    resp = web.json_response({"ok": bool(s.get("ok")), "user_id": s.get("user_id")})
+    resp.headers["Access-Control-Allow-Origin"] = "*"
+    return resp
+
+
+
+    
     # routes + CORS
     app.router.add_get("/member_count", member_count_handler)
     app.router.add_get("/teams", teams_handler)
@@ -6303,7 +6430,13 @@ async def start_web_api():
     app.router.add_route("OPTIONS", "/member_count", options_handler)
     app.router.add_route("OPTIONS", "/teams", options_handler)
     app.router.add_route("OPTIONS", "/rules", options_handler)
+app.router.add_get("/auth/discord/login", auth_login)
+app.router.add_get("/auth/discord/callback", auth_callback)
+app.router.add_get("/auth/me", auth_me)
 
+app.router.add_route("OPTIONS", "/auth/me", options_handler)
+
+    
     runner = web.AppRunner(app)
     await runner.setup()
     port = int(os.getenv("PORT", "8080"))
