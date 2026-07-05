@@ -6111,6 +6111,32 @@ class SchedulingAdmin(commands.Cog):
 
 
 # ---------- Web API helpers (module-level) ----------
+
+from urllib.parse import urlencode
+
+async def auth_login(request: web.Request):
+    scope = "identify guilds.members.read"
+    params = {
+        "client_id": DISCORD_CLIENT_ID,
+        "redirect_uri": DISCORD_REDIRECT_URI,
+        "response_type": "code",
+        "scope": scope,
+    }
+    url = "https://discord.com/api/oauth2/authorize?" + urlencode(params)
+    raise web.HTTPFound(url)
+
+async def auth_callback(request: web.Request):
+    # placeholder until you add full OAuth exchange logic
+    raise web.HTTPFound("/")
+
+async def auth_me(request: web.Request):
+    resp = web.json_response({"ok": False})
+    resp.headers["Access-Control-Allow-Origin"] = "*"
+    return resp
+
+
+
+
 GOOGLE_DOC_ID = "15C61xZ9CJOYD94Mk4JSTBb0O3nSXR6u_KIQEIHxbuE8"
 DOC_EXPORT_URL = f"https://docs.google.com/document/d/{GOOGLE_DOC_ID}/export?format=html"
 
