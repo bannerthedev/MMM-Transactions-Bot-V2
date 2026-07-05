@@ -6192,7 +6192,7 @@ async def options_handler(request: web.Request):
 async def start_web_api():
     app = web.Application()
 
-    # /member_count (NOW includes status: Bracket / Seeding / Idle)
+    # /member_count
     async def member_count_handler(request: web.Request):
         guild = bot.get_guild(TEST_GUILD_ID)
 
@@ -6206,7 +6206,6 @@ async def start_web_api():
                 if m.status != discord.Status.offline:
                     online_count += 1
 
-        # team_count from transactions channel logs
         team_count = 0
         if guild is not None:
             tx_ch = guild.get_channel(TRANSACTIONS_CHANNEL_ID)
@@ -6224,13 +6223,12 @@ async def start_web_api():
                 live_team_ids = created_ids - disbanded_ids
                 team_count = len(live_team_ids)
 
-        # ---- STATUS logic: Bracket vs Seeding vs Idle ----
+        # STATUS: Bracket / Seeding / Idle
         status = "Idle"
         bracket_ts = None
         seeding_ts = None
 
         if guild is not None:
-            # last message time in bracket channel
             try:
                 br_ch = guild.get_channel(BRACKET_CHANNEL_ID)
                 if isinstance(br_ch, discord.TextChannel):
@@ -6242,7 +6240,6 @@ async def start_web_api():
             except Exception:
                 pass
 
-            # last message time in seeding points channel
             try:
                 sd_ch = guild.get_channel(SEEDING_POINTS_CHANNEL_ID)
                 if isinstance(sd_ch, discord.TextChannel):
@@ -6263,7 +6260,7 @@ async def start_web_api():
             "member_count": member_count,
             "team_count": team_count,
             "online_count": online_count,
-            "status": status,  # NEW
+            "status": status,
         }
         resp = web.json_response(data)
         resp.headers["Access-Control-Allow-Origin"] = "*"
@@ -6366,83 +6363,28 @@ async def start_web_api():
             resp.headers["Access-Control-Allow-Origin"] = "*"
             return resp
 
-
-
-async def auth_login(request: web.Request):
-    # scopes needed to read their guild member roles
-    scope = "identify guilds.members.read"
-    params = {
-        "client_id": DISCORD_CLIENT_ID,
-        "redirect_uri": DISCORD_REDIRECT_URI,
-        "response_type": "code",
-        "scope": scope,
-        "prompt": "none",
-    }
-    url = "https://discord.com/api/oauth2/authorize?" + urlencode(params)
-    raise web.HTTPFound(url)
-
-async def auth_callback(request: web.Request):
-    code = request.query.get("code")
-    if not code:
-        raise web.HTTPFound("/auth/discord/failed")
-
-    try:
-        access_token = await discord_exchange_code(code)
-        user = await discord_get_user(access_token)
-        user_id = int(user["id"])
-        roles = await discord_get_member_roles(access_token, TEST_GUILD_ID, user_id)
-
-        ok = bool(roles & ALLOWED_ROLE_IDS)
-
-        session_id = secrets.token_urlsafe(24)
-        _SESSIONS[session_id] = {"user_id": user_id, "ok": ok, "ts": datetime.utcnow().timestamp()}
-
-        resp = web.HTTPFound("/auth/discord/success" if ok else "/auth/discord/denied")
-        # cookie for your website to use
-        cookie_val = _make_cookie(session_id)
-        resp.set_cookie("mmm_media", cookie_val, httponly=True, secure=True, samesite="Lax", max_age=60*60*6)
-        return resp
-    except Exception as e:
-        print("auth_callback error:", e)
-        raise web.HTTPFound("/auth/discord/failed")
-
-async def auth_me(request: web.Request):
-    cookie = request.cookies.get("mmm_media")
-    sid = _verify_cookie(cookie) if cookie else None
-    if not sid or sid not in _SESSIONS:
-        resp = web.json_response({"ok": False})
-        resp.headers["Access-Control-Allow-Origin"] = "*"
-        return resp
-
-    s = _SESSIONS[sid]
-    resp = web.json_response({"ok": bool(s.get("ok")), "user_id": s.get("user_id")})
-    resp.headers["Access-Control-Allow-Origin"] = "*"
-    return resp
-
-
-
-    
-    # routes + CORS
+    # ---- ROUTES (ALL MUST BE HERE) ----
     app.router.add_get("/member_count", member_count_handler)
     app.router.add_get("/teams", teams_handler)
     app.router.add_get("/rules", rules_handler)
 
+    # OAuth routes
+    app.router.add_get("/auth/discord/login", auth_login)
+    app.router.add_get("/auth/discord/callback", auth_callback)
+    app.router.add_get("/auth/me", auth_me)
+
+    # CORS OPTIONS
     app.router.add_route("OPTIONS", "/member_count", options_handler)
     app.router.add_route("OPTIONS", "/teams", options_handler)
     app.router.add_route("OPTIONS", "/rules", options_handler)
-app.router.add_get("/auth/discord/login", auth_login)
-app.router.add_get("/auth/discord/callback", auth_callback)
-app.router.add_get("/auth/me", auth_me)
+    app.router.add_route("OPTIONS", "/auth/me", options_handler)
 
-app.router.add_route("OPTIONS", "/auth/me", options_handler)
-
-    
     runner = web.AppRunner(app)
     await runner.setup()
     port = int(os.getenv("PORT", "8080"))
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    print(f"Web API running on port {port} (/member_count, /teams, /rules)")
+    print(f"Web API running on port {port} (/member_count, /teams, /rules, /auth/discord/login, /auth/me)")
 
 
 # ---------------- BOT SETUP ----------------
