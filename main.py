@@ -1711,7 +1711,6 @@ class AutoCodeCog(commands.Cog):
         return ff_str + " EST"
 
 
-
     def _resolve_member_from_mention(self, guild: discord.Guild, mention: str) -> Optional[discord.Member]:
         if not mention:
             return None
@@ -1833,6 +1832,64 @@ class AutoCodeCog(commands.Cog):
         await self.bot.wait_until_ready()
 
 
+from datetime import datetime, timedelta, timezone  # make sure timezone is imported
+
+EST_TZ = timezone(timedelta(hours=-5))
+
+def parse_time_to_unix_est(time_str: str) -> int | None:
+    """
+    Parse strings like:
+      '1/17 at 8PM EST'
+      '6/25/26 at 8PM EST'
+      '6/25 at 8:10PM EST'
+      '6/25/26 at 8:10PM EST'
+    into a UNIX timestamp, assuming the time is EST.
+    """
+    if not time_str or " at " not in time_str:
+        return None
+
+    date_part, time_part = time_str.split(" at ", 1)
+    date_part = date_part.strip()
+    time_part = time_part.strip()
+
+    # Strip timezone words
+    for tz_word in ("EST", "EDT", "est", "edt"):
+        time_part = time_part.replace(tz_word, "")
+    time_part = time_part.strip()
+
+    # Handle missing year -> use current year
+    parts = date_part.split("/")
+    if len(parts) == 2:
+        m, d = parts
+        try:
+            year_now = datetime.now().year
+            date_part_full = f"{int(m)}/{int(d)}/{year_now}"
+        except Exception:
+            return None
+    else:
+        date_part_full = date_part
+
+    fmts = [
+        "%m/%d/%y %I%p",
+        "%m/%d/%Y %I%p",
+        "%m/%d/%y %I:%M%p",
+        "%m/%d/%Y %I:%M%p",
+    ]
+
+    dt_est = None
+    for fmt in fmts:
+        try:
+            dt_est = datetime.strptime(f"{date_part_full} {time_part}", fmt)
+            break
+        except Exception:
+            continue
+
+    if dt_est is None:
+        return None
+
+    # Attach EST timezone so .timestamp() is correct
+    dt_est = dt_est.replace(tzinfo=EST_TZ)
+    return int(dt_est.timestamp())
 
 
 
@@ -3077,11 +3134,16 @@ class AssignmentClaimView(discord.ui.View):
             header = None
             special = False
 
+        # Build Discord timestamp from the stored time string
+        unix_ts = parse_time_to_unix_est(self.time)
+        ts_str = f" (<t:{unix_ts}:F>)" if unix_ts is not None else ""
+
+        # --------- MATCH_TIMES message content ---------
         if special:
             mt_content = (
                 f"{header}\n"
                 f"> Teams: {self.team1_name} vs {self.team2_name}\n"
-                f"> Time: {self.time}\n"
+                f"> Time: {self.time}{ts_str}\n"
                 f"> Referee: {ref_text}\n"
                 f"> Caster: {caster_text}"
             )
@@ -3089,7 +3151,7 @@ class AssignmentClaimView(discord.ui.View):
             mt_content = (
                 f"{self.team1_name} vs {self.team2_name}\n"
                 f"> WEEK: {self.week}\n"
-                f"> Time: {self.time}\n"
+                f"> Time: {self.time}{ts_str}\n"
                 f"> Referee: {ref_text}\n"
                 f"> Caster: {caster_text}"
             )
@@ -3102,6 +3164,7 @@ class AssignmentClaimView(discord.ui.View):
             except Exception:
                 pass
 
+        # --------- ASSIGNMENTS message content ---------
         staff_mentions = []
         for rid in (HEAD_REF_ROLE_ID, REF_ROLE_ID, HEAD_CASTER_ROLE_ID, CASTER_ROLE_ID):
             r = guild.get_role(rid)
@@ -3114,7 +3177,7 @@ class AssignmentClaimView(discord.ui.View):
                 f"{staff_header}\n"
                 f"{header}\n"
                 f"> Teams: {self.team1_name} vs {self.team2_name}\n"
-                f"> Time: {self.time}\n"
+                f"> Time: {self.time}{ts_str}\n"
                 f"> Referee: {ref_text}\n"
                 f"> Caster: {caster_text}"
             )
@@ -3123,34 +3186,11 @@ class AssignmentClaimView(discord.ui.View):
                 f"{staff_header}\n"
                 f"{self.team1_name} vs {self.team2_name}\n"
                 f"> WEEK: {self.week}\n"
-                f"> Time: {self.time}\n"
+                f"> Time: {self.time}{ts_str}\n"
                 f"> Referee: {ref_text}\n"
                 f"> Caster: {caster_text}"
             )
 
-        if isinstance(assignments, discord.TextChannel):
-            as_msg = await self._find_message_to_edit(assignments)
-            try:
-                if as_msg:
-                    await as_msg.edit(content=as_content, view=self)
-            except Exception:
-                pass
-
-        staff_mentions = []
-        for rid in (HEAD_REF_ROLE_ID, REF_ROLE_ID, HEAD_CASTER_ROLE_ID, CASTER_ROLE_ID):
-            r = guild.get_role(rid)
-            if r:
-                staff_mentions.append(r.mention)
-        staff_header = " ".join(staff_mentions)
-
-        as_content = (
-            f"{staff_header}\n"
-            f"{self.team1_name} vs {self.team2_name}\n"
-            f"> WEEK: {self.week}\n"
-            f"> Time: {self.time}\n"
-            f"> referee: {ref_text}\n"
-            f"> Caster: {caster_text}"
-        )
         if isinstance(assignments, discord.TextChannel):
             as_msg = await self._find_message_to_edit(assignments)
             try:
@@ -3161,14 +3201,12 @@ class AssignmentClaimView(discord.ui.View):
 
     @discord.ui.button(label="Claim Caster", style=discord.ButtonStyle.primary)
     async def claim_caster(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # allow only for FINALS and only head casters / head refs / senior refs
         user = interaction.user
         guild = interaction.guild
         if guild is None:
             await interaction.response.send_message("Use this in a server.", ephemeral=True)
             return
 
-        # finals-only
         if "final" not in (self.week or "").lower():
             await interaction.response.send_message("Caster claiming is only allowed for Finals.", ephemeral=True)
             return
@@ -3191,17 +3229,14 @@ class AssignmentClaimView(discord.ui.View):
 
         await self._update_messages(interaction)
 
-
     @discord.ui.button(label="Claim Referee", style=discord.ButtonStyle.primary)
     async def claim_ref(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # allow only for FINALS and only head casters / head refs / senior refs
         user = interaction.user
         guild = interaction.guild
         if guild is None:
             await interaction.response.send_message("Use this in a server.", ephemeral=True)
             return
 
-        # finals-only
         if "final" not in (self.week or "").lower():
             await interaction.response.send_message("Referee claiming is only allowed for Finals.", ephemeral=True)
             return
@@ -3292,11 +3327,16 @@ class TimeAcceptView(discord.ui.View):
             header = None
             special = False
 
+        # build discord timestamp
+        unix_ts = parse_time_to_unix_est(self.time)
+        ts_str = f" (<t:{unix_ts}:F>)" if unix_ts is not None else ""
+
+        # MATCH_TIMES message
         if special:
             mt_content = (
                 f"{header}\n"
                 f"> Teams: {self.team1_name} vs {self.team2_name}\n"
-                f"> Time: {self.time}\n"
+                f"> Time: {self.time}{ts_str}\n"
                 f"> Referee: \n"
                 f"> Caster: "
             )
@@ -3304,7 +3344,7 @@ class TimeAcceptView(discord.ui.View):
             mt_content = (
                 f"{self.team1_name} vs {self.team2_name}\n"
                 f"> WEEK: {self.week}\n"
-                f"> Time: {self.time}\n"
+                f"> Time: {self.time}{ts_str}\n"
                 f"> Referee: \n"
                 f"> Caster: "
             )
@@ -3315,6 +3355,7 @@ class TimeAcceptView(discord.ui.View):
             except Exception:
                 pass
 
+        # ASSIGNMENTS message
         staff_mentions = []
         for rid in (HEAD_REF_ROLE_ID, REF_ROLE_ID, HEAD_CASTER_ROLE_ID, CASTER_ROLE_ID):
             r = guild.get_role(rid)
@@ -3327,7 +3368,7 @@ class TimeAcceptView(discord.ui.View):
                 f"{staff_header}\n"
                 f"{header}\n"
                 f"> Teams: {self.team1_name} vs {self.team2_name}\n"
-                f"> Time: {self.time}\n"
+                f"> Time: {self.time}{ts_str}\n"
                 f"> Referee: \n"
                 f"> Caster: "
             )
@@ -3336,7 +3377,7 @@ class TimeAcceptView(discord.ui.View):
                 f"{staff_header}\n"
                 f"{self.team1_name} vs {self.team2_name}\n"
                 f"> WEEK: {self.week}\n"
-                f"> Time: {self.time}\n"
+                f"> Time: {self.time}{ts_str}\n"
                 f"> Referee: \n"
                 f"> Caster: "
             )
@@ -3518,16 +3559,21 @@ class ForceTimeView(discord.ui.View):
         week = "Forced"
         time_str = self.time_str
 
+        unix_ts = parse_time_to_unix_est(time_str)
+        ts_str = f" (<t:{unix_ts}:F>)" if unix_ts is not None else ""
+
+
         # MATCH_TIMES entry (like a finalized time)
         match_times = guild.get_channel(MATCH_TIMES_CHANNEL_ID)
         if isinstance(match_times, discord.TextChannel):
             mt_content = (
                 f"{self.team1_name} vs {self.team2_name}\n"
                 f"> WEEK: {week}\n"
-                f"> Time: {time_str}\n"
+                f"> Time: {time_str}{ts_str}\n"
                 f"> Referee: \n"
                 f"> Caster: "
             )
+
             try:
                 await match_times.send(mt_content)
             except Exception:
@@ -3547,11 +3593,10 @@ class ForceTimeView(discord.ui.View):
                 f"{staff_header}\n"
                 f"{self.team1_name} vs {self.team2_name}\n"
                 f"> WEEK: {week}\n"
-                f"> Time: {time_str}\n"
+                f"> Time: {time_str}{ts_str}\n"
                 f"> Referee: \n"
                 f"> Caster: "
             )
-
             try:
                 view = AssignmentClaimView(week=week, time=time_str,
                                            team1_name=self.team1_name,
