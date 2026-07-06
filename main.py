@@ -6434,12 +6434,111 @@ async def start_web_api():
             resp.headers["Access-Control-Allow-Origin"] = "*"
             return resp
 
-    # ---- ROUTES (ALL MUST BE HERE) ----
+    # /report_score – called by ref.html when a score hits 5
+    async def report_score_handler(request: web.Request):
+        """
+        JSON body:
+        {
+          "team1": "Banner",
+          "team2": "Test",
+          "score1": 5,
+          "score2": 0
+        }
+        """
+        try:
+            data = await request.json()
+        except Exception:
+            resp = web.json_response({"ok": False, "error": "invalid_json"}, status=400)
+            resp.headers["Access-Control-Allow-Origin"] = "*"
+            return resp
+
+        team1 = (data.get("team1") or "Team 1").strip()
+        team2 = (data.get("team2") or "Team 2").strip()
+        try:
+            s1 = int(data.get("score1", 0))
+            s2 = int(data.get("score2", 0))
+        except Exception:
+            s1 = s2 = 0
+
+        guild = bot.get_guild(TEST_GUILD_ID)
+        if guild is None:
+            resp = web.json_response({"ok": False, "error": "no_guild"}, status=500)
+            resp.headers["Access-Control-Allow-Origin"] = "*"
+            return resp
+
+        ch = guild.get_channel(MATCH_SCORE_CHANNEL_ID)
+        if not isinstance(ch, discord.TextChannel):
+            resp = web.json_response({"ok": False, "error": "no_channel"}, status=500)
+            resp.headers["Access-Control-Allow-Origin"] = "*"
+            return resp
+
+        # Decide winner/loser
+        if s1 > s2:
+            winner = team1
+            loser = team2
+        elif s2 > s1:
+            winner = team2
+            loser = team1
+        else:
+            winner = "Tie"
+            loser = "Tie"
+
+        score_str = f"{s1}-{s2}"
+
+        if winner == "Tie":
+            msg = (
+                f"{team1} vs {team2}\n"
+                f"> Winner: Tie\n"
+                f"score: {score_str}\n"
+                f"Loser: Tie"
+            )
+        else:
+            msg = (
+                f"{team1} vs {team2}\n"
+                f"> Winner: {winner}\n"
+                f"score: {score_str}\n"
+                f"Loser: {loser}"
+            )
+
+        try:
+            await ch.send(msg)
+        except Exception:
+            resp = web.json_response({"ok": False, "error": "send_failed"}, status=500)
+            resp.headers["Access-Control-Allow-Origin"] = "*"
+            return resp
+
+        resp = web.json_response({"ok": True})
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        return resp
+
+    # OAuth routes
+    async def auth_login(request: web.Request):
+        scope = "identify guilds.members.read"
+        params = {
+            "client_id": DISCORD_CLIENT_ID,
+            "redirect_uri": DISCORD_REDIRECT_URI,
+            "response_type": "code",
+            "scope": scope,
+        }
+        url = "https://discord.com/api/oauth2/authorize?" + urlencode(params)
+        raise web.HTTPFound(url)
+
+    async def auth_callback(request: web.Request):
+        # placeholder until you add full OAuth exchange logic
+        raise web.HTTPFound("/")
+
+    async def auth_me(request: web.Request):
+        resp = web.json_response({"ok": False})
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        return resp
+
+    # ---- ROUTES ----
     app.router.add_get("/member_count", member_count_handler)
     app.router.add_get("/teams", teams_handler)
     app.router.add_get("/rules", rules_handler)
 
-    # OAuth routes
+    app.router.add_post("/report_score", report_score_handler)
+
     app.router.add_get("/auth/discord/login", auth_login)
     app.router.add_get("/auth/discord/callback", auth_callback)
     app.router.add_get("/auth/me", auth_me)
@@ -6449,13 +6548,14 @@ async def start_web_api():
     app.router.add_route("OPTIONS", "/teams", options_handler)
     app.router.add_route("OPTIONS", "/rules", options_handler)
     app.router.add_route("OPTIONS", "/auth/me", options_handler)
+    app.router.add_route("OPTIONS", "/report_score", options_handler)
 
     runner = web.AppRunner(app)
     await runner.setup()
     port = int(os.getenv("PORT", "8080"))
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    print(f"Web API running on port {port} (/member_count, /teams, /rules, /auth/discord/login, /auth/me)")
+    print(f"Web API running on port {port} (/member_count, /teams, /rules, /report_score, /auth/discord/login, /auth/me)")
 
 
 # ---------------- BOT SETUP ----------------
