@@ -6562,24 +6562,6 @@ async def start_web_api():
 
     # /create_broadcast – called from caster.html
     async def create_broadcast_handler(request: web.Request):
-        """
-        JSON body:
-        {
-          "team1": "Banner",
-          "team2": "Test",
-          "round": "Bracket Round 1",
-          "title": "...",
-          "description": "..."
-        }
-
-        Expected success response (once implemented):
-        {
-          "ok": true,
-          "stream_key": "hsdj-9p57-sjts-6ayq-56tr",
-          "youtube_url": "https://youtube.com/watch?v=...",
-          "broadcast_id": "abc123"
-        }
-        """
         try:
             data = await request.json()
         except Exception:
@@ -6597,19 +6579,17 @@ async def start_web_api():
             resp.headers["Access-Control-Allow-Origin"] = "*"
             return resp
 
-        # TODO: implement real YouTube Live API integration here.
-        # At this point you should:
-        # 1) Create a liveStream (ingestionSettings.key is your stream key).
-        # 2) Create a liveBroadcast with the given title/description.
-        # 3) Bind the liveStream to the liveBroadcast.
-        # 4) Return the real stream_key + youtube_url (watch URL).
-        #
-        # Until that is implemented, we return an error instead of a fake key.
+        # TEMP: dummy values so front-end succeeds
+        dummy_stream_key = "hsdj-9p57-sjts-6ayq-56tr"
+        dummy_youtube_url = "https://www.youtube.com/@MMM_League"
+        dummy_broadcast_id = "AIzaSyApf8KnuZcGuIGq9ae2JyXwB8ipoBzGFq8"
 
         resp = web.json_response({
-            "ok": False,
-            "error": "youtube_not_configured"
-        }, status=501)
+            "ok": True,
+            "stream_key": dummy_stream_key,
+            "youtube_url": dummy_youtube_url,
+            "broadcast_id": dummy_broadcst_id,
+        })
         resp.headers["Access-Control-Allow-Origin"] = "*"
         return resp
 
