@@ -6633,7 +6633,7 @@ async def start_web_api():
             stream_key = stream["cdn"]["ingestionInfo"]["streamName"]
             stream_id = stream["id"]
 
-            # Schedule start time ~5 minutes from now (UTC), RFC3339 format
+            # 2) Create liveBroadcast (scheduled ~5 minutes from now, UTC)
             start_time = (datetime.utcnow() + timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
             broadcast = youtube.liveBroadcasts().insert(
@@ -6662,6 +6662,16 @@ async def start_web_api():
                 id=broadcast_id,
                 streamId=stream_id
             ).execute()
+
+            # 4) Try to transition to live
+            try:
+                youtube.liveBroadcasts().transition(
+                    part="status",
+                    broadcastStatus="live",
+                    id=broadcast_id,
+                ).execute()
+            except Exception as te:
+                print("YouTube transition to live failed:", repr(te))
 
         except Exception as e:
             # Log server-side and also return the message to the client for debugging
