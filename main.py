@@ -6662,9 +6662,13 @@ async def start_web_api():
             ).execute()
 
         except Exception as e:
-            # Log server-side and report to client
-            print("YouTube create_broadcast error:", repr(e))
-            resp = web.json_response({"ok": False, "error": "youtube_api_error"}, status=500)
+            # Log server-side and also return the message to the client for debugging
+            err_text = repr(e)
+            print("YouTube create_broadcast error:", err_text)
+            resp = web.json_response(
+                {"ok": False, "error": "youtube_api_error", "detail": err_text},
+                status=500,
+            )
             resp.headers["Access-Control-Allow-Origin"] = "*"
             return resp
 
