@@ -6560,42 +6560,51 @@ async def start_web_api():
         resp.headers["Access-Control-Allow-Origin"] = "*"
         return resp
 
-    # /create_broadcast – called from caster.html
-async def create_broadcast_handler(request: web.Request):
-    try:
-        data = await request.json()
-    except Exception:
-        resp = web.json_response({"ok": False, "error": "invalid_json"}, status=400)
+    # /create_broadcast – reuse an existing YouTube broadcast ID
+    async def create_broadcast_handler(request: web.Request):
+        """
+        JSON body:
+        {
+          "team1": "Banner",
+          "team2": "Test",
+          "round": "Bracket Round 1",
+          "title": "...",
+          "description": "...",
+          "broadcast_id": "AIzaSyApf8KnuZcGuIGq9ae2JyXwB8ipoBzGFq8"
+        }
+        """
+        try:
+            data = await request.json()
+        except Exception:
+            resp = web.json_response({"ok": False, "error": "invalid_json"}, status=400)
+            resp.headers["Access-Control-Allow-Origin"] = "*"
+            return resp
+
+        team1 = (data.get("team1") or "").strip()
+        team2 = (data.get("team2") or "").strip()
+        title = (data.get("title") or "").strip()
+        broadcast_id = (data.get("broadcast_id") or "").strip()
+
+        if not team1 or not team2 or not title:
+            resp = web.json_response({"ok": False, "error": "missing_fields"}, status=400)
+            resp.headers["Access-Control-Allow-Origin"] = "*"
+            return resp
+
+        if not broadcast_id:
+            resp = web.json_response({"ok": False, "error": "missing_broadcast_id"}, status=400)
+            resp.headers["Access-Control-Allow-Origin"] = "*"
+            return resp
+
+        youtube_url = f"https://www.youtube.com/watch?v={AIzaSyApf8KnuZcGuIGq9ae2JyXwB8ipoBzGFq8}"
+
+        resp = web.json_response({
+            "ok": True,
+            "stream_key": "hsdj-9p57-sjts-6ayq-56tr",
+            "youtube_url": youtube_url,
+            "broadcast_id": broadcast_id,
+        })
         resp.headers["Access-Control-Allow-Origin"] = "*"
         return resp
-
-    team1 = (data.get("team1") or "").strip()
-    team2 = (data.get("team2") or "").strip()
-    title = (data.get("title") or "").strip()
-    broadcast_id = (data.get("broadcast_id") or "").strip()
-
-    if not team1 or not team2 or not title:
-        resp = web.json_response({"ok": False, "error": "missing_fields"}, status=400)
-        resp.headers["Access-Control-Allow-Origin"] = "*"
-        return resp
-
-    if not broadcast_id:
-        resp = web.json_response({"ok": False, "error": "missing_broadcast_id"}, status=400)
-        resp.headers["Access-Control-Allow-Origin"] = "*"
-        return resp
-
-    youtube_url = f"https://www.youtube.com/watch?v={AIzaSyApf8KnuZcGuIGq9ae2JyXwB8ipoBzGFq8}"
-
-    # No fake key; tell caster to use Studio
-resp = web.json_response({
-    "ok": True,
-    "stream_key": "hsdj-9p57-sjts-6ayq-56tr",
-    "youtube_url": "https://www.youtube.com/@MMM_League",
-    "broadcast_id": "AIzaSyApf8KnuZcGuIGq9ae2JyXwB8ipoBzGFq8",
-})
-
-    resp.headers["Access-Control-Allow-Origin"] = "*"
-    return resp
 
     # ---- ROUTES ----
     app.router.add_get("/member_count", member_count_handler)
