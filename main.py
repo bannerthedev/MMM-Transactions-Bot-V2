@@ -13,6 +13,9 @@ import aiohttp
 import xml.etree.ElementTree as ET
 import bs4
 from bs4 import BeautifulSoup
+from google.oauth2.credentials import Credentials
+from googleapiclient.discovery import build
+
 
 import discord
 from discord.ext import commands
@@ -6559,10 +6562,6 @@ async def start_web_api():
         resp = web.json_response({"ok": True})
         resp.headers["Access-Control-Allow-Origin"] = "*"
         return resp
-
-    # /create_broadcast – use a fixed existing YouTube broadcast
-    from google.oauth2.credentials import Credentials
-    from googleapiclient.discovery import build
 
     # /create_broadcast – actually creates a YouTube live (requires YouTube OAuth)
     async def create_broadcast_handler(request: web.Request):
