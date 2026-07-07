@@ -6572,10 +6572,10 @@ async def start_web_api():
           "description": "..."
         }
 
-        Response:
+        Expected success response (once implemented):
         {
           "ok": true,
-          "stream_key": "hsdj-9p57-sjts-6ayq-56tr",
+          "stream_key": "rtmp-key-here",
           "youtube_url": "https://youtube.com/watch?v=...",
           "broadcast_id": "abc123"
         }
@@ -6598,17 +6598,18 @@ async def start_web_api():
             return resp
 
         # TODO: implement real YouTube Live API integration here.
-        # For now, return dummy values so the front-end works.
-        dummy_stream_key = "MMM-TEST-STREAM-KEY"
-        dummy_youtube_url = "https://youtube.com/watch?v=dummy"
-        dummy_broadcast_id = "dummy-id"
+        # At this point you should:
+        # 1) Create a liveStream (ingestionSettings.key is your stream key).
+        # 2) Create a liveBroadcast with the given title/description.
+        # 3) Bind the liveStream to the liveBroadcast.
+        # 4) Return the real stream_key + youtube_url (watch URL).
+        #
+        # Until that is implemented, we return an error instead of a fake key.
 
         resp = web.json_response({
-            "ok": True,
-            "stream_key": dummy_stream_key,
-            "youtube_url": dummy_youtube_url,
-            "broadcast_id": dummy_broadcast_id,
-        })
+            "ok": False,
+            "error": "youtube_not_configured"
+        }, status=501)
         resp.headers["Access-Control-Allow-Origin"] = "*"
         return resp
 
