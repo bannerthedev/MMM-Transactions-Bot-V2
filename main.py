@@ -15,6 +15,10 @@ import bs4
 from bs4 import BeautifulSoup
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
+import io
+import requests
+from googleapiclient.http import MediaIoBaseUpload
+
 
 
 import discord
@@ -78,6 +82,8 @@ SCRIM_REFEREE_ROLE_ID = 1517295621982130276  # <-- replace 0 with your Scrim Ref
 BRACKET_CHANNEL_ID = 1516607901873999952
 BRACKET_BASE_IMAGE_PATH = "MMM BRACKET.png"
 BRACKET_OUTPUT_IMAGE_PATH = "MMM_BRACKET_FILLED.png"
+YOUTUBE_THUMB_URL = "https://cdn.discordapp.com/attachments/1457550168395223232/1508602624365297715/MONKE_MONKE_MONKE.png"
+
 
 ROSTER_LOCKED = False
 SEEDING_OPEN = False
@@ -6663,7 +6669,24 @@ async def start_web_api():
                 streamId=stream_id
             ).execute()
 
-            # 4) Try to transition to live
+            # 4) Set thumbnail using your fixed image
+            if YOUTUBE_THUMB_URL:
+                try:
+                    thumb_resp = requests.get(YOUTUBE_THUMB_URL, timeout=10)
+                    thumb_resp.raise_for_status()
+                    media = MediaIoBaseUpload(
+                        io.BytesIO(thumb_resp.content),
+                        mimetype="image/jpeg",
+                        resumable=False,
+                    )
+                    youtube.thumbnails().set(
+                        videoId=broadcast_id,
+                        media_body=media
+                    ).execute()
+                except Exception as te:
+                    print("YouTube set thumbnail failed:", repr(te))
+
+            # 5) Try to transition to live
             try:
                 youtube.liveBroadcasts().transition(
                     part="status",
