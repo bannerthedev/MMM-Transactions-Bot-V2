@@ -6191,25 +6191,26 @@ async def auth_login(request: web.Request):
 async def auth_callback(request: web.Request):
     """
     Step 2: Discord redirects back here with ?code= and ?state=.
-    Decide if user is caster or ref and send them to caster.html or ref.html.
+    Decide if user is caster or ref and send them to caster.html or ref.html
+    on the main site (monkeleague.com).
     """
     code = request.query.get("code")
     state = request.query.get("state", "/")  # "media" from the button
 
     if not code:
-        raise web.HTTPFound("/")
+        raise web.HTTPFound("https://monkeleague.com/")
 
     try:
         access_token = await discord_exchange_code(code)
     except Exception:
-        raise web.HTTPFound("/")
+        raise web.HTTPFound("https://monkeleague.com/")
 
     # who is this user?
     try:
         user = await discord_get_user(access_token)
         user_id = int(user["id"])
     except Exception:
-        raise web.HTTPFound("/")
+        raise web.HTTPFound("https://monkeleague.com/")
 
     # which roles do they have in the test guild?
     try:
@@ -6217,18 +6218,15 @@ async def auth_callback(request: web.Request):
     except Exception:
         roles = set()
 
-    # Decide destination
-    dest = "/"
+    # Decide destination (on your main site)
+    dest = "https://monkeleague.com/"
     if state == "media":
-        # Caster or Head Caster -> caster.html
         if HEAD_CASTER_ROLE_ID in roles or CASTER_ROLE_ID in roles:
-            dest = "/caster.html"
-        # Referee, Head Ref, or senior ref (REF_ROLE_ID) -> ref.html
+            dest = "https://monkeleague.com/caster.html"
         elif HEAD_REF_ROLE_ID in roles or REF_ROLE_ID in roles:
-            dest = "/ref.html"
+            dest = "https://monkeleague.com/ref.html"
         else:
-            # no media roles: send home
-            dest = "/"
+            dest = "https://monkeleague.com/"
 
     raise web.HTTPFound(dest)
 
