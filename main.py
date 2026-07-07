@@ -6155,27 +6155,76 @@ class SchedulingAdmin(commands.Cog):
             pass
 
 
-# ---------- Web API helpers (module-level) ----------
-
 from urllib.parse import urlencode
 
+# ---------- AUTH HELPERS (web side) ----------
+
 async def auth_login(request: web.Request):
+    """
+    Step 1: redirect user to Discord OAuth.
+    Supports optional ?target=media (used by Media Team button).
+    """
+    target = request.query.get("target", "/")
+    # store target in 'state' so we know what to do after callback
+    state = target
+
     scope = "identify guilds.members.read"
     params = {
         "client_id": DISCORD_CLIENT_ID,
         "redirect_uri": DISCORD_REDIRECT_URI,
         "response_type": "code",
         "scope": scope,
+        "state": state,
     }
     url = "https://discord.com/api/oauth2/authorize?" + urlencode(params)
     raise web.HTTPFound(url)
 
 async def auth_callback(request: web.Request):
-    # placeholder until you add full OAuth exchange logic
-    raise web.HTTPFound("/")
+    """
+    Step 2: Discord redirects back here with ?code= and ?state=.
+    Decide if user is caster or ref and send them to caster.html or ref.html.
+    """
+    code = request.query.get("code")
+    state = request.query.get("state", "/")  # "media" from the button
+
+    if not code:
+        raise web.HTTPFound("/")
+
+    try:
+        access_token = await discord_exchange_code(code)
+    except Exception:
+        raise web.HTTPFound("/")
+
+    # who is this user?
+    try:
+        user = await discord_get_user(access_token)
+        user_id = int(user["id"])
+    except Exception:
+        raise web.HTTPFound("/")
+
+    # which roles do they have in the test guild?
+    try:
+        roles = await discord_get_member_roles(access_token, TEST_GUILD_ID, user_id)
+    except Exception:
+        roles = set()
+
+    # Decide destination
+    dest = "/"
+    if state == "media":
+        # Caster or Head Caster -> caster.html
+        if HEAD_CASTER_ROLE_ID in roles or CASTER_ROLE_ID in roles:
+            dest = "/caster.html"
+        # Referee, Head Ref, or senior ref (REF_ROLE_ID) -> ref.html
+        elif HEAD_REF_ROLE_ID in roles or REF_ROLE_ID in roles:
+            dest = "/ref.html"
+        else:
+            # no media roles: send home
+            dest = "/"
+
+    raise web.HTTPFound(dest)
 
 async def auth_me(request: web.Request):
-    resp = web.json_response({"ok": False})
+    resp = web.json_response({"ok": False, "reason": "not_implemented"})
     resp.headers["Access-Control-Allow-Origin"] = "*"
     return resp
 
@@ -6511,24 +6560,55 @@ async def start_web_api():
         resp.headers["Access-Control-Allow-Origin"] = "*"
         return resp
 
-    # OAuth routes
-    async def auth_login(request: web.Request):
-        scope = "identify guilds.members.read"
-        params = {
-            "client_id": DISCORD_CLIENT_ID,
-            "redirect_uri": DISCORD_REDIRECT_URI,
-            "response_type": "code",
-            "scope": scope,
+    # /create_broadcast – called from caster.html
+    async def create_broadcast_handler(request: web.Request):
+        """
+        JSON body:
+        {
+          "team1": "Banner",
+          "team2": "Test",
+          "round": "Bracket Round 1",
+          "title": "...",
+          "description": "..."
         }
-        url = "https://discord.com/api/oauth2/authorize?" + urlencode(params)
-        raise web.HTTPFound(url)
 
-    async def auth_callback(request: web.Request):
-        # placeholder until you add full OAuth exchange logic
-        raise web.HTTPFound("/")
+        Response:
+        {
+          "ok": true,
+          "stream_key": "hsdj-9p57-sjts-6ayq-56tr",
+          "youtube_url": "https://youtube.com/watch?v=...",
+          "broadcast_id": "abc123"
+        }
+        """
+        try:
+            data = await request.json()
+        except Exception:
+            resp = web.json_response({"ok": False, "error": "invalid_json"}, status=400)
+            resp.headers["Access-Control-Allow-Origin"] = "*"
+            return resp
 
-    async def auth_me(request: web.Request):
-        resp = web.json_response({"ok": False})
+        team1 = (data.get("team1") or "").strip()
+        team2 = (data.get("team2") or "").strip()
+        title = (data.get("title") or "").strip()
+        description = (data.get("description") or "").strip()
+
+        if not team1 or not team2 or not title:
+            resp = web.json_response({"ok": False, "error": "missing_fields"}, status=400)
+            resp.headers["Access-Control-Allow-Origin"] = "*"
+            return resp
+
+        # TODO: implement real YouTube Live API integration here.
+        # For now, return dummy values so the front-end works.
+        dummy_stream_key = "MMM-TEST-STREAM-KEY"
+        dummy_youtube_url = "https://youtube.com/watch?v=dummy"
+        dummy_broadcast_id = "dummy-id"
+
+        resp = web.json_response({
+            "ok": True,
+            "stream_key": dummy_stream_key,
+            "youtube_url": dummy_youtube_url,
+            "broadcast_id": dummy_broadcast_id,
+        })
         resp.headers["Access-Control-Allow-Origin"] = "*"
         return resp
 
@@ -6536,9 +6616,10 @@ async def start_web_api():
     app.router.add_get("/member_count", member_count_handler)
     app.router.add_get("/teams", teams_handler)
     app.router.add_get("/rules", rules_handler)
-
     app.router.add_post("/report_score", report_score_handler)
+    app.router.add_post("/create_broadcast", create_broadcast_handler)
 
+    # OAuth routes (use the module-level auth_* helpers)
     app.router.add_get("/auth/discord/login", auth_login)
     app.router.add_get("/auth/discord/callback", auth_callback)
     app.router.add_get("/auth/me", auth_me)
@@ -6547,15 +6628,20 @@ async def start_web_api():
     app.router.add_route("OPTIONS", "/member_count", options_handler)
     app.router.add_route("OPTIONS", "/teams", options_handler)
     app.router.add_route("OPTIONS", "/rules", options_handler)
-    app.router.add_route("OPTIONS", "/auth/me", options_handler)
     app.router.add_route("OPTIONS", "/report_score", options_handler)
+    app.router.add_route("OPTIONS", "/create_broadcast", options_handler)
+    app.router.add_route("OPTIONS", "/auth/me", options_handler)
 
     runner = web.AppRunner(app)
     await runner.setup()
     port = int(os.getenv("PORT", "8080"))
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    print(f"Web API running on port {port} (/member_count, /teams, /rules, /report_score, /auth/discord/login, /auth/me)")
+    print(
+        f"Web API running on port {port} "
+        f"(/member_count, /teams, /rules, /report_score, /create_broadcast, "
+        f"/auth/discord/login, /auth/discord/callback, /auth/me)"
+    )
 
 
 # ---------------- BOT SETUP ----------------
