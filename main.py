@@ -6575,7 +6575,7 @@ async def start_web_api():
         Expected success response (once implemented):
         {
           "ok": true,
-          "stream_key": "rtmp-key-here",
+          "stream_key": "hsdj-9p57-sjts-6ayq-56tr",
           "youtube_url": "https://youtube.com/watch?v=...",
           "broadcast_id": "abc123"
         }
