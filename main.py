@@ -6561,15 +6561,19 @@ async def start_web_api():
         return resp
 
     # /create_broadcast – use a fixed existing YouTube broadcast
+    from google.oauth2.credentials import Credentials
+    from googleapiclient.discovery import build
+
+    # /create_broadcast – actually creates a YouTube live (requires YouTube OAuth)
     async def create_broadcast_handler(request: web.Request):
         """
-        JSON body from caster.html:
+        JSON body:
         {
           "team1": "Banner",
           "team2": "Test",
           "round": "Bracket Round 1",
-          "title": "...",
-          "description": "..."
+          "title": "...",        # built by caster.html
+          "description": "..."   # base description
         }
         """
         try:
@@ -6582,22 +6586,92 @@ async def start_web_api():
         team1 = (data.get("team1") or "").strip()
         team2 = (data.get("team2") or "").strip()
         title = (data.get("title") or "").strip()
+        description = (data.get("description") or "").strip()
 
         if not team1 or not team2 or not title:
             resp = web.json_response({"ok": False, "error": "missing_fields"}, status=400)
             resp.headers["Access-Control-Allow-Origin"] = "*"
             return resp
 
-        # FIXED broadcast ID for your channel (replace with your real ID)
-        # If your watch URL is https://www.youtube.com/watch?v=ABC123, then ABC123 is the ID.
-        broadcast_id = "AIzaSyApf8KnuZcGuIGq9ae2JyXwB8ipoBzGFq8"
-        youtube_url = f"https://www.youtube.com/watch?v={broadcast_id}"
+        # Load YouTube OAuth credentials from env
+        client_id = os.getenv("YOUTUBE_CLIENT_ID")
+        client_secret = os.getenv("YOUTUBE_CLIENT_SECRET")
+        refresh_token = os.getenv("YOUTUBE_REFRESH_TOKEN")
 
-        # We cannot get stream key via API for an existing manual broadcast;
-        # caster must copy it from YouTube Studio.
+        if not client_id or not client_secret or not refresh_token:
+            resp = web.json_response({"ok": False, "error": "youtube_not_configured"}, status=500)
+            resp.headers["Access-Control-Allow-Origin"] = "*"
+            return resp
+
+        # Build Credentials object with refresh token
+        creds = Credentials(
+            None,
+            refresh_token=refresh_token,
+            token_uri="https://oauth2.googleapis.com/token",
+            client_id=client_id,
+            client_secret=client_secret,
+            scopes=["https://www.googleapis.com/auth/youtube"]
+        )
+
+        try:
+            youtube = build("youtube", "v3", credentials=creds)
+
+            # 1) Create liveStream (get stream key)
+            stream = youtube.liveStreams().insert(
+                part="snippet,cdn",
+                body={
+                    "snippet": {
+                        "title": title
+                    },
+                    "cdn": {
+                        "frameRate": "60fps",
+                        "ingestionType": "rtmp",
+                        "resolution": "1080p"
+                    }
+                }
+            ).execute()
+
+            stream_key = stream["cdn"]["ingestionInfo"]["streamName"]
+            stream_id = stream["id"]
+
+            # 2) Create liveBroadcast
+            broadcast = youtube.liveBroadcasts().insert(
+                part="snippet,contentDetails,status",
+                body={
+                    "snippet": {
+                        "title": title,
+                        "description": description
+                        # optional: "scheduledStartTime": "2026-07-07T20:00:00Z"
+                    },
+                    "status": {
+                        "privacyStatus": "public"
+                    },
+                    "contentDetails": {
+                        "monitorStream": {"enableMonitorStream": True}
+                    }
+                }
+            ).execute()
+
+            broadcast_id = broadcast["id"]
+            youtube_url = f"https://www.youtube.com/watch?v={broadcast_id}"
+
+            # 3) Bind stream to broadcast
+            youtube.liveBroadcasts().bind(
+                part="id,contentDetails",
+                id=broadcast_id,
+                streamId=stream_id
+            ).execute()
+
+        except Exception as e:
+            # Log server-side and report to client
+            print("YouTube create_broadcast error:", repr(e))
+            resp = web.json_response({"ok": False, "error": "youtube_api_error"}, status=500)
+            resp.headers["Access-Control-Allow-Origin"] = "*"
+            return resp
+
         resp = web.json_response({
             "ok": True,
-            "stream_key": "hsdj-9p57-sjts-6ayq-56tr",
+            "stream_key": stream_key,
             "youtube_url": youtube_url,
             "broadcast_id": broadcast_id,
         })
