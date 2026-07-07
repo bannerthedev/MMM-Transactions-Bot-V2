@@ -6560,17 +6560,16 @@ async def start_web_api():
         resp.headers["Access-Control-Allow-Origin"] = "*"
         return resp
 
-    # /create_broadcast – reuse an existing YouTube broadcast ID
+    # /create_broadcast – use a fixed existing YouTube broadcast
     async def create_broadcast_handler(request: web.Request):
         """
-        JSON body:
+        JSON body from caster.html:
         {
           "team1": "Banner",
           "team2": "Test",
           "round": "Bracket Round 1",
           "title": "...",
-          "description": "...",
-          "broadcast_id": "AIzaSyApf8KnuZcGuIGq9ae2JyXwB8ipoBzGFq8"
+          "description": "..."
         }
         """
         try:
@@ -6583,20 +6582,19 @@ async def start_web_api():
         team1 = (data.get("team1") or "").strip()
         team2 = (data.get("team2") or "").strip()
         title = (data.get("title") or "").strip()
-        broadcast_id = (data.get("broadcast_id") or "").strip()
 
         if not team1 or not team2 or not title:
             resp = web.json_response({"ok": False, "error": "missing_fields"}, status=400)
             resp.headers["Access-Control-Allow-Origin"] = "*"
             return resp
 
-        if not broadcast_id:
-            resp = web.json_response({"ok": False, "error": "missing_broadcast_id"}, status=400)
-            resp.headers["Access-Control-Allow-Origin"] = "*"
-            return resp
+        # FIXED broadcast ID for your channel (replace with your real ID)
+        # If your watch URL is https://www.youtube.com/watch?v=ABC123, then ABC123 is the ID.
+        broadcast_id = "AIzaSyApf8KnuZcGuIGq9ae2JyXwB8ipoBzGFq8"
+        youtube_url = f"https://www.youtube.com/watch?v={broadcast_id}"
 
-        youtube_url = f"https://www.youtube.com/watch?v={AIzaSyApf8KnuZcGuIGq9ae2JyXwB8ipoBzGFq8}"
-
+        # We cannot get stream key via API for an existing manual broadcast;
+        # caster must copy it from YouTube Studio.
         resp = web.json_response({
             "ok": True,
             "stream_key": "hsdj-9p57-sjts-6ayq-56tr",
