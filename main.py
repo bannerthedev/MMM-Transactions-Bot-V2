@@ -6633,14 +6633,16 @@ async def start_web_api():
             stream_key = stream["cdn"]["ingestionInfo"]["streamName"]
             stream_id = stream["id"]
 
-            # 2) Create liveBroadcast
+            # Schedule start time ~5 minutes from now (UTC), RFC3339 format
+            start_time = (datetime.utcnow() + timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
             broadcast = youtube.liveBroadcasts().insert(
                 part="snippet,contentDetails,status",
                 body={
                     "snippet": {
                         "title": title,
-                        "description": description
-                        # optional: "scheduledStartTime": "2026-07-07T20:00:00Z"
+                        "description": description,
+                        "scheduledStartTime": start_time,
                     },
                     "status": {
                         "privacyStatus": "public"
