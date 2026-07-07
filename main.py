@@ -6587,12 +6587,13 @@ async def create_broadcast_handler(request: web.Request):
     youtube_url = f"https://www.youtube.com/watch?v={AIzaSyApf8KnuZcGuIGq9ae2JyXwB8ipoBzGFq8}"
 
     # No fake key; tell caster to use Studio
-    resp = web.json_response({
-        "ok": True,
-        "stream_key": "hsdj-9p57-sjts-6ayq-56tr",
-        "youtube_url": https://www.youtube.com/@MMM_League,
-        "broadcast_id": AIzaSyApf8KnuZcGuIGq9ae2JyXwB8ipoBzGFq8,
-    })
+resp = web.json_response({
+    "ok": True,
+    "stream_key": "hsdj-9p57-sjts-6ayq-56tr",
+    "youtube_url": "https://www.youtube.com/@MMM_League",
+    "broadcast_id": "AIzaSyApf8KnuZcGuIGq9ae2JyXwB8ipoBzGFq8",
+})
+
     resp.headers["Access-Control-Allow-Origin"] = "*"
     return resp
 
