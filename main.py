@@ -40,6 +40,7 @@ MATCH_TIMES_CHANNEL_ID = 1506740647686701096
 ASSIGNMENTS_CHANNEL_ID = 1482879883863392457
 SCRIM_CATEGORY_ID = 1493328827542143137
 SEEDING_POINTS_CHANNEL_ID = 1453096022292168947  # <- replace 0 with your seeding-points channel ID
+GROUPS_CHANNEL_ID = 1453096022292168947  # <- set this to the channel ID where /group should post
 
 
 # Force-time review channel (staff-only announcement)
@@ -132,6 +133,8 @@ CONFIG_FILE = data_dir / "config.json"
 YOUTUBE_STATE_FILE = data_dir / "youtube_state.json"
 CODES_STATE_FILE = data_dir / "codes_state.json"
 HEADSETS_FILE = data_dir / "headsets.json"
+GROUPS_FILE = data_dir / "groups.json"
+
 
 
 
@@ -316,6 +319,24 @@ def remove_pending_invite(team_role_id: int, user_id: int):
     else:
         data.pop(key, None)
     save_invites(data)
+
+
+def load_groups_state() -> dict:
+    if not GROUPS_FILE.is_file():
+        return {}
+    try:
+        with GROUPS_FILE.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+            return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+def save_groups_state(data: dict):
+    try:
+        with GROUPS_FILE.open("w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+    except Exception:
+        pass
 
 
 
@@ -3216,23 +3237,41 @@ class AssignmentClaimView(discord.ui.View):
             await interaction.response.send_message("Use this in a server.", ephemeral=True)
             return
 
-        if "final" not in (self.week or "").lower():
-            await interaction.response.send_message("Caster claiming is only allowed for Finals.", ephemeral=True)
-            return
+        is_finals = "final" in (self.week or "").lower()
+        is_admin = user.guild_permissions.administrator
 
-        allowed = any(has_role_id(user, rid) for rid in (HEAD_CASTER_ROLE_ID, HEAD_REF_ROLE_ID, REF_ROLE_ID))
-        if not allowed:
-            await interaction.response.send_message("Only head casters, head refs, or senior refs may claim Caster for Finals.", ephemeral=True)
-            return
+        # Normal matches: any caster or head caster can claim.
+        # Finals: ONLY head caster (plus admins) can claim.
+        has_caster = has_role_id(user, CASTER_ROLE_ID) or has_role_id(user, HEAD_CASTER_ROLE_ID)
+        has_head_caster = has_role_id(user, HEAD_CASTER_ROLE_ID)
+
+        if is_finals:
+            if not (has_head_caster or is_admin):
+                await interaction.response.send_message(
+                    "Only Head Casters (or admins) may claim Caster for Finals.",
+                    ephemeral=True,
+                )
+                return
+        else:
+            if not has_caster:
+                await interaction.response.send_message(
+                    "Only casters may claim this slot.",
+                    ephemeral=True,
+                )
+                return
 
         prev = self.caster
         self.caster = user
 
+        # disable only this button for this view
         button.disabled = True
         await interaction.response.send_message("You claimed Caster.", ephemeral=True)
+
         if prev and prev != user:
             try:
-                await prev.send(f"You were unclaimed as Caster for {self.team1_name} vs {self.team2_name}.")
+                await prev.send(
+                    f"You were unclaimed as Caster for {self.team1_name} vs {self.team2_name}."
+                )
             except Exception:
                 pass
 
@@ -3246,23 +3285,40 @@ class AssignmentClaimView(discord.ui.View):
             await interaction.response.send_message("Use this in a server.", ephemeral=True)
             return
 
-        if "final" not in (self.week or "").lower():
-            await interaction.response.send_message("Referee claiming is only allowed for Finals.", ephemeral=True)
-            return
+        is_finals = "final" in (self.week or "").lower()
+        is_admin = user.guild_permissions.administrator
 
-        allowed = any(has_role_id(user, rid) for rid in (HEAD_CASTER_ROLE_ID, HEAD_REF_ROLE_ID, REF_ROLE_ID))
-        if not allowed:
-            await interaction.response.send_message("Only head casters, head refs, or senior refs may claim Referee for Finals.", ephemeral=True)
-            return
+        # Normal matches: any ref or head ref can claim.
+        # Finals: ONLY head ref (or admins) can claim.
+        has_ref = has_role_id(user, REF_ROLE_ID) or has_role_id(user, HEAD_REF_ROLE_ID)
+        has_head_ref = has_role_id(user, HEAD_REF_ROLE_ID)
+
+        if is_finals:
+            if not (has_head_ref or is_admin):
+                await interaction.response.send_message(
+                    "Only Head Referees (or admins) may claim Referee for Finals.",
+                    ephemeral=True,
+                )
+                return
+        else:
+            if not has_ref:
+                await interaction.response.send_message(
+                    "Only referees may claim this slot.",
+                    ephemeral=True,
+                )
+                return
 
         prev = self.referee
         self.referee = user
 
         button.disabled = True
         await interaction.response.send_message("You claimed Referee.", ephemeral=True)
+
         if prev and prev != user:
             try:
-                await prev.send(f"You were unclaimed as Referee for {self.team1_name} vs {self.team2_name}.")
+                await prev.send(
+                    f"You were unclaimed as Referee for {self.team1_name} vs {self.team2_name}."
+                )
             except Exception:
                 pass
 
@@ -4718,6 +4774,301 @@ class AdminManage(commands.Cog):
             await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
         else:
             await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+
+
+
+
+class GroupStageCog(commands.Cog):
+    """
+    /group:
+    - Randomly assigns teams into Groups A–F (4 teams each, max 24 teams).
+    - Posts group standings message into GROUPS_CHANNEL_ID.
+    - Creates all scheduling channels for all group matches.
+    - Listens to MATCH_SCORE_CHANNEL_ID and updates group standings.
+    """
+
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
+        self.state = load_groups_state()  # structure documented below
+
+    # ---------- helpers ----------
+
+    def _init_groups_from_teams(self, guild: discord.Guild) -> dict:
+        """
+        Returns a state dict:
+
+        {
+          "groups": {
+            "A": {"teams": ["Team1","Team2","Team3","Team4"]},
+            ...
+          },
+          "standings": {
+            "Team1": {"group": "A","W":0,"L":0,"DIFF":0},
+            ...
+          },
+          "message": {
+            "channel_id": int,
+            "message_id": int or None
+          }
+        }
+        """
+        teams_data = load_teams()
+        roles: list[discord.Role] = []
+
+        for entry in teams_data:
+            rid = entry.get("role_id")
+            if not rid:
+                continue
+            try:
+                rid_int = int(rid)
+            except (TypeError, ValueError):
+                continue
+            r = guild.get_role(rid_int)
+            if r and not r.is_default() and not r.managed:
+                roles.append(r)
+
+        # randomize in-place
+        random.shuffle(roles)
+
+        # take max 24 teams
+        roles = roles[:24]
+
+        groups = {}
+        standings = {}
+
+        group_letters = ["A", "B", "C", "D", "E", "F"]
+        idx = 0
+        for letter in group_letters:
+            group_teams = [r.name for r in roles[idx:idx + 4]]
+            idx += 4
+            if not group_teams:
+                break
+            groups[letter] = {"teams": group_teams}
+            for tname in group_teams:
+                standings[tname] = {"group": letter, "W": 0, "L": 0, "DIFF": 0}
+
+        return {
+            "groups": groups,
+            "standings": standings,
+            "message": {
+                "channel_id": None,
+                "message_id": None,
+            },
+        }
+
+    def _build_groups_text(self, state: dict) -> str:
+        groups = state.get("groups", {})
+        standings = state.get("standings", {})
+
+        lines: list[str] = []
+        for letter in ["A", "B", "C", "D", "E", "F"]:
+            g = groups.get(letter)
+            if not g:
+                continue
+            lines.append(f"Group {letter}")
+            for tname in g.get("teams", []):
+                s = standings.get(tname, {"W": 0, "L": 0, "DIFF": 0})
+                lines.append(
+                    f"{tname} {s['W']} W - {s['L']} L - {s['DIFF']} DIFF"
+                )
+            lines.append("")  # blank line between groups
+
+        return "\n".join(lines).strip()
+
+    def _all_group_matches(self, group_teams: list[str]) -> list[tuple[str, str]]:
+        """
+        For 4 teams [0,1,2,3], return the 6 pairings.
+        Round 1: (0,1) (2,3)
+        Round 2: (0,2) (1,3)
+        Round 3: (0,3) (1,2)
+        """
+        if len(group_teams) < 2:
+            return []
+        t = group_teams
+        if len(t) < 4:
+            # generic round-robin
+            pairs = []
+            for i in range(len(t)):
+                for j in range(i + 1, len(t)):
+                    pairs.append((t[i], t[j]))
+            return pairs
+
+        return [
+            (t[0], t[1]), (t[2], t[3]),
+            (t[0], t[2]), (t[1], t[3]),
+            (t[0], t[3]), (t[1], t[2]),
+        ]
+
+    def _sanitize_for_channel(self, name: str) -> str:
+        base = name.lower()
+        base = re.sub(r"[^a-z0-9]+", "-", base)
+        base = base.strip("-")
+        return base or "team"
+
+    async def _create_scheduling_channels(self, guild: discord.Guild, state: dict):
+        cat = guild.get_channel(SCRIM_CATEGORY_ID)
+        if not isinstance(cat, discord.CategoryChannel):
+            return
+
+        groups = state.get("groups", {})
+        for letter, g in groups.items():
+            teams = g.get("teams", [])
+            matches = self._all_group_matches(teams)
+            for t1, t2 in matches:
+                name = f"group-{letter.lower()}-{self._sanitize_for_channel(t1)}-vs-{self._sanitize_for_channel(t2)}"
+                topic = f"{t1} Vs {t2} (Group {letter})"
+
+                # Avoid duplicates: skip if channel already exists
+                exists = discord.utils.get(guild.text_channels, name=name)
+                if exists:
+                    continue
+
+                overwrites: dict[discord.abc.Snowflake, discord.PermissionOverwrite] = {}
+                overwrites[guild.default_role] = discord.PermissionOverwrite(view_channel=False)
+
+                # Try to resolve team roles for view permissions
+                r1, _, _ = resolve_team_any(guild, t1)
+                r2, _, _ = resolve_team_any(guild, t2)
+                if r1:
+                    overwrites[r1] = discord.PermissionOverwrite(view_channel=True, send_messages=True)
+                if r2 and r2 != r1:
+                    overwrites[r2] = discord.PermissionOverwrite(view_channel=True, send_messages=True)
+
+                try:
+                    await guild.create_text_channel(
+                        name=name,
+                        category=cat,
+                        overwrites=overwrites,
+                        topic=topic,
+                        reason=f"Group stage match: {t1} vs {t2} (Group {letter})",
+                    )
+                except Exception:
+                    continue
+
+    def _parse_score_line(self, content: str) -> tuple[str | None, str | None, int | None, int | None]:
+        """
+        From a /submit score style message, extract:
+        winner_name, loser_name, winner_score, loser_score
+        (scores are from 'Score: 3-1').
+        """
+        lines = [ln.strip() for ln in (content or "").splitlines() if ln.strip()]
+        if not lines:
+            return None, None, None, None
+
+        winner_name = None
+        loser_name = None
+        score_str = None
+
+        for ln in lines:
+            ln_clean = ln.lstrip("> ").strip()
+            lower = ln_clean.lower()
+            if lower.startswith("winner:"):
+                winner_name = ln_clean.split(":", 1)[1].strip()
+            elif lower.startswith("loser:"):
+                loser_name = ln_clean.split(":", 1)[1].strip()
+            elif lower.startswith("score:"):
+                score_str = ln_clean.split(":", 1)[1].strip()
+
+        if not (winner_name and loser_name and score_str):
+            return None, None, None, None
+
+        w_s, l_s = None, None
+        if "-" in score_str:
+            parts = score_str.split("-", 1)
+            try:
+                w_s = int(parts[0].strip())
+                l_s = int(parts[1].strip())
+            except Exception:
+                w_s = l_s = None
+
+        return winner_name, loser_name, w_s, l_s
+
+    def _apply_result_to_standings(self, state: dict, winner: str, loser: str, w_s: int | None, l_s: int | None):
+        standings = state.setdefault("standings", {})
+
+        if winner not in standings or loser not in standings:
+            return  # not a group match
+
+        sw = standings[winner]
+        sl = standings[loser]
+
+        sw["W"] = sw.get("W", 0) + 1
+        sl["L"] = sl.get("L", 0) + 1
+
+        if w_s is not None and l_s is not None:
+            diff = w_s - l_s
+            sw["DIFF"] = sw.get("DIFF", 0) + diff
+            sl["DIFF"] = sl.get("DIFF", 0) - diff
+
+    async def _update_standings_message(self, guild: discord.Guild):
+        msg_info = self.state.get("message", {})
+        ch_id = msg_info.get("channel_id")
+        old_id = msg_info.get("message_id")
+
+        if not ch_id:
+            return
+        ch = guild.get_channel(int(ch_id))
+        if not isinstance(ch, discord.TextChannel):
+            return
+
+        text = self._build_groups_text(self.state)
+
+        # send new message
+        new_msg = None
+        try:
+            new_msg = await ch.send(f"```{text}```")
+        except Exception:
+            return
+
+        # delete old message
+        if old_id:
+            try:
+                old_msg = await ch.fetch_message(int(old_id))
+                await old_msg.delete()
+            except Exception:
+                pass
+
+        # store new id
+        self.state.setdefault("message", {})["message_id"] = new_msg.id
+        save_groups_state(self.state)
+
+    # ---------- /group command ----------
+
+    @app_commands.guilds(Object(id=TEST_GUILD_ID))
+    @app_commands.default_permissions(administrator=True)
+    @app_commands.command(
+        name="group",
+        description="Randomly make Groups A–F, create scheduling, and post standings.",
+    )
+    async def group(self, interaction: discord.Interaction):
+        guild = interaction.guild
+        if guild is None:
+            await interaction.response.send_message("Use this in a server.", ephemeral=True)
+            return
+
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("You do not have permission to use this.", ephemeral=True)
+            return
+
+        out_ch = guild.get_channel(GROUPS_CHANNEL_ID)
+        if not isinstance(out_ch, discord.TextChannel):
+            await interaction.response.send_message(
+                "Groups channel is not configured or invalid.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True, thinking=True)
+
+        # Initialize state from teams
+        self.state = self._init_groups_from_teams(guild)
+        self.state["message"]["channel_id"] = out_ch.id
+        self.state["message"]["message_id"]
+
+
+
 
 
 class InfoCommands(commands.Cog):
@@ -6779,6 +7130,7 @@ class MainBot(commands.Bot):
             "TeamRoleAutoOrderCog",
             "RescrimCog",
             "RoleOrderFixCog",
+            "GroupStageCog",
         ]
         for name in cog_names:
             cls = globals().get(name)
