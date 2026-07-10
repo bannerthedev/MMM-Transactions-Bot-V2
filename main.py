@@ -4827,68 +4827,61 @@ class GroupStageCog(commands.Cog):
 
     # ---------- helpers ----------
 
-    def _init_groups_from_teams(self, guild: discord.Guild) -> dict:
-        """
-        Returns a state dict:
+def _init_groups_from_teams(self, guild: discord.Guild) -> dict:
+    teams_data = load_teams()
+    roles: list[discord.Role] = []
 
-        {
-          "groups": {
-            "A": {"teams": ["Team1","Team2","Team3","Team4"]},
-            ...
-          },
-          "standings": {
-            "Team1": {"group": "A","W":0,"L":0,"DIFF":0},
-            ...
-          },
-          "message": {
-            "channel_id": int,
-            "message_id": int or None
-          }
-        }
-        """
-        teams_data = load_teams()
-        roles: list[discord.Role] = []
+    for entry in teams_data:
+        rid = entry.get("role_id")
+        if not rid:
+            continue
+        try:
+            rid_int = int(rid)
+        except (TypeError, ValueError):
+            continue
+        r = guild.get_role(rid_int)
+        if r and not r.is_default() and not r.managed:
+            roles.append(r)
 
-        for entry in teams_data:
-            rid = entry.get("role_id")
-            if not rid:
-                continue
-            try:
-                rid_int = int(rid)
-            except (TypeError, ValueError):
-                continue
-            r = guild.get_role(rid_int)
-            if r and not r.is_default() and not r.managed:
-                roles.append(r)
+    # Limit to max 24 total teams
+    roles = roles[:24]
 
-        # randomize in-place
-        random.shuffle(roles)
+    name_map = {r.name.lower(): r for r in roles}
+    fixed_a_names = ["Brothers Til Death", "LYNX", "Gelato", "Cute"]
+    fixed_a_roles: list[discord.Role] = [name_map[tn.lower()] for tn in fixed_a_names if tn.lower() in name_map]
 
-        # take max 24 teams
-        roles = roles[:24]
+    remaining_roles = [r for r in roles if r not in fixed_a_roles]
+    random.shuffle(remaining_roles)
 
-        groups = {}
-        standings = {}
+    group_a_roles = list(fixed_a_roles)
+    while len(group_a_roles) < 4 and remaining_roles:
+        group_a_roles.append(remaining_roles.pop(0))
+    group_a_roles = group_a_roles[:4]
 
-        group_letters = ["A", "B", "C", "D", "E", "F"]
-        idx = 0
-        for letter in group_letters:
-            group_teams = [r.name for r in roles[idx:idx + 4]]
-            idx += 4
-            if not group_teams:
-                break
+    groups = {}
+    standings = {}
+
+    flat = [r.name for r in remaining_roles]
+    group_letters = ["A", "B", "C", "D", "E", "F"]
+
+    groups["A"] = {"teams": [r.name for r in group_a_roles]}
+
+    idx = 0
+    for letter in group_letters[1:]:
+        group_teams = flat[idx:idx + 4]
+        idx += 4
+        if group_teams:
             groups[letter] = {"teams": group_teams}
-            for tname in group_teams:
-                standings[tname] = {"group": letter, "W": 0, "L": 0, "DIFF": 0}
 
-        return {
-            "groups": groups,
-            "standings": standings,
-            "message": {
-                "channel_id": None,
-                "message_id": None,
-            },
-        }
+    for letter, g in list(groups.items()):
+        for tname in g.get("teams", []):
+            standings[tname] = {"group": letter, "W": 0, "L": 0, "DIFF": 0}
+
+    return {
+        "groups": groups,
+        "standings": standings,
+        "message": {"channel_id": None, "message_id": None},
+    }
 
     def _build_groups_text(self, state: dict) -> str:
         groups = state.get("groups", {})
