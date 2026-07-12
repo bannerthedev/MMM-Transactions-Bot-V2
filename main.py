@@ -4815,9 +4815,9 @@ class AdminManage(commands.Cog):
 class GroupStageCog(commands.Cog):
     """
     Group stage standings:
-    - /group: post fixed Groups A–F into GROUPS_CHANNEL_ID, save message id.
+    - /group: post fixed Groups A–F into GROUPS_CHANNEL_ID and reset standings.
     - Listens to MATCH_SCORE_CHANNEL_ID and updates standings on each result.
-    - Reposts the standings message and deletes the previous one each time.
+    - Each update: send a new standings message and delete the old one.
     """
 
     def __init__(self, bot: commands.Bot):
@@ -4834,10 +4834,10 @@ class GroupStageCog(commands.Cog):
         groups = {
             "A": {"teams": ["Brothers Til Death", "Lynx", "Gelato", "Cute"]},
             "B": {"teams": ["Lyft", "Absolute", "MEOW", "Cutie"]},
-            "C": {"teams": ["Turn To God", "Freaks", "Speedy Monkey Jay", "Venom"]},
+            "C": {"teams": ["Turn To God", "Freaks", "Speedy Monkey Jay", "Supernova"]},
             "D": {"teams": ["Fusion", "Sexy Reapers", "Born 2 Kill", "Obsession"]},
             "E": {"teams": ["Monke Militia", "Suppression", "The Munchers", "The Branching Champs"]},
-            "F": {"teams": ["Supernova", "Symbiote", "After 1", "Faithful Monkeys"]},
+            "F": {"teams": ["Luxury", "Symbiote", "After 1", "Faithful Monkeys"]},
         }
 
         standings: dict[str, dict[str, int]] = {}
@@ -4863,11 +4863,8 @@ class GroupStageCog(commands.Cog):
             lines.append(f"Group {letter}")
             for tname in g.get("teams", []):
                 s = standings.get(tname, {"W": 0, "L": 0, "DIFF": 0})
-                # matches your formatting
-                lines.append(
-                    f"{tname} {s['W']} W - {s['L']} L - {s['DIFF']} DIFF"
-                )
-            lines.append("")  # blank line
+                lines.append(f"{tname} {s['W']} W - {s['L']} L - 0 DIFF")
+            lines.append("")
 
         return "\n".join(lines).strip()
 
@@ -4920,20 +4917,19 @@ class GroupStageCog(commands.Cog):
         l_s: int | None,
     ):
         """
-        Update W/L only. DIFF is intentionally left unchanged (stays 0),
-        to match your provided examples.
+        Update W/L only. DIFF is intentionally left unchanged (stays 0).
         """
         standings = state.setdefault("standings", {})
 
         if winner not in standings or loser not in standings:
-            return  # not one of the fixed group teams
+            return  # result not for a group-stage team
 
         sw = standings[winner]
         sl = standings[loser]
 
         sw["W"] = sw.get("W", 0) + 1
         sl["L"] = sl.get("L", 0) + 1
-        # DIFF not modified (always stays 0 in this design)
+        # DIFF intentionally unchanged
 
     async def _update_standings_message(self, guild: discord.Guild):
         """
@@ -4951,7 +4947,6 @@ class GroupStageCog(commands.Cog):
         text = self._build_groups_text(self.state)
 
         # send new message
-        new_msg = None
         try:
             new_msg = await ch.send(f"```{text}```")
         except Exception:
@@ -5015,15 +5010,14 @@ class GroupStageCog(commands.Cog):
         """
         Listen to MATCH_SCORE_CHANNEL_ID, update standings when
         a group match is reported and repost the standings message.
+        Works with bot-authored /submit score messages.
         """
-        if message.author.bot:
-            return
         if message.guild is None:
             return
         if message.channel.id != MATCH_SCORE_CHANNEL_ID:
             return
 
-        # Ensure we have a groups state (require /group to be run first)
+        # Ensure we have a groups state (require /group to be run first once)
         if not self.state or "groups" not in self.state or "standings" not in self.state:
             return
 
@@ -5035,7 +5029,7 @@ class GroupStageCog(commands.Cog):
         self._apply_result_to_standings(self.state, winner, loser, w_s, l_s)
         save_groups_state(self.state)
 
-        # Repost standings in GROUPS_CHANNEL_ID
+        # Repost standings in GROUPS_CHANNEL_ID (sends new and deletes old)
         await self._update_standings_message(message.guild)
 
 
