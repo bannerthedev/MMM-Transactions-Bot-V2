@@ -4814,74 +4814,42 @@ class AdminManage(commands.Cog):
 
 class GroupStageCog(commands.Cog):
     """
-    /group:
-    - Randomly assigns teams into Groups A–F (4 teams each, max 24 teams).
-    - Posts group standings message into GROUPS_CHANNEL_ID.
-    - Creates all scheduling channels for all group matches.
-    - Listens to MATCH_SCORE_CHANNEL_ID and updates group standings.
+    Group stage standings:
+    - /group: post fixed Groups A–F into GROUPS_CHANNEL_ID, save message id.
+    - Listens to MATCH_SCORE_CHANNEL_ID and updates standings on each result.
+    - Reposts the standings message and deletes the previous one each time.
     """
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.state = load_groups_state()  # structure documented below
+        self.state = load_groups_state()  # { "groups": {...}, "standings": {...}, "message": {...} }
 
     # ---------- helpers ----------
 
-def _init_groups_from_teams(self, guild: discord.Guild) -> dict:
-    teams_data = load_teams()
-    roles: list[discord.Role] = []
+    def _init_groups_state(self) -> dict:
+        """
+        Initialize fixed groups and zeroed standings.
+        DIFF is kept at 0 and never changed (to match your examples).
+        """
+        groups = {
+            "A": {"teams": ["Brothers Til Death", "Lynx", "Gelato", "Cute"]},
+            "B": {"teams": ["Lyft", "Absolute", "MEOW", "Cutie"]},
+            "C": {"teams": ["Turn To God", "Freaks", "Speedy Monkey Jay", "Supernova"]},
+            "D": {"teams": ["Fusion", "Sexy Reapers", "Born 2 Kill", "Obsession"]},
+            "E": {"teams": ["Monke Militia", "Suppression", "The Munchers", "The Branching Champs"]},
+            "F": {"teams": ["Luxury", "Symbiote", "After 1", "Faithful Monkeys"]},
+        }
 
-    for entry in teams_data:
-        rid = entry.get("role_id")
-        if not rid:
-            continue
-        try:
-            rid_int = int(rid)
-        except (TypeError, ValueError):
-            continue
-        r = guild.get_role(rid_int)
-        if r and not r.is_default() and not r.managed:
-            roles.append(r)
+        standings: dict[str, dict[str, int]] = {}
+        for letter, data in groups.items():
+            for t in data.get("teams", []):
+                standings[t] = {"group": letter, "W": 0, "L": 0, "DIFF": 0}
 
-    # Limit to max 24 total teams
-    roles = roles[:24]
-
-    name_map = {r.name.lower(): r for r in roles}
-    fixed_a_names = ["Brothers Til Death", "LYNX", "Gelato", "Cute"]
-    fixed_a_roles: list[discord.Role] = [name_map[tn.lower()] for tn in fixed_a_names if tn.lower() in name_map]
-
-    remaining_roles = [r for r in roles if r not in fixed_a_roles]
-    random.shuffle(remaining_roles)
-
-    group_a_roles = list(fixed_a_roles)
-    while len(group_a_roles) < 4 and remaining_roles:
-        group_a_roles.append(remaining_roles.pop(0))
-    group_a_roles = group_a_roles[:4]
-
-    groups = {}
-    standings = {}
-
-    flat = [r.name for r in remaining_roles]
-    group_letters = ["A", "B", "C", "D", "E", "F"]
-
-    groups["A"] = {"teams": [r.name for r in group_a_roles]}
-
-    idx = 0
-    for letter in group_letters[1:]:
-        group_teams = flat[idx:idx + 4]
-        idx += 4
-        if group_teams:
-            groups[letter] = {"teams": group_teams}
-
-    for letter, g in list(groups.items()):
-        for tname in g.get("teams", []):
-            standings[tname] = {"group": letter, "W": 0, "L": 0, "DIFF": 0}
-
-    return {
-        "groups": groups,
-        "standings": standings,
-        "message": {"channel_id": None, "message_id": None},
-    }
+        return {
+            "groups": groups,
+            "standings": standings,
+            "message": {"channel_id": None, "message_id": None},
+        }
 
     def _build_groups_text(self, state: dict) -> str:
         groups = state.get("groups", {})
@@ -4895,88 +4863,21 @@ def _init_groups_from_teams(self, guild: discord.Guild) -> dict:
             lines.append(f"Group {letter}")
             for tname in g.get("teams", []):
                 s = standings.get(tname, {"W": 0, "L": 0, "DIFF": 0})
+                # matches your formatting
                 lines.append(
                     f"{tname} {s['W']} W - {s['L']} L - {s['DIFF']} DIFF"
                 )
-            lines.append("")  # blank line between groups
+            lines.append("")  # blank line
 
         return "\n".join(lines).strip()
 
-    def _all_group_matches(self, group_teams: list[str]) -> list[tuple[str, str]]:
-        """
-        For 4 teams [0,1,2,3], return the 6 pairings.
-        Round 1: (0,1) (2,3)
-        Round 2: (0,2) (1,3)
-        Round 3: (0,3) (1,2)
-        """
-        if len(group_teams) < 2:
-            return []
-        t = group_teams
-        if len(t) < 4:
-            # generic round-robin
-            pairs = []
-            for i in range(len(t)):
-                for j in range(i + 1, len(t)):
-                    pairs.append((t[i], t[j]))
-            return pairs
-
-        return [
-            (t[0], t[1]), (t[2], t[3]),
-            (t[0], t[2]), (t[1], t[3]),
-            (t[0], t[3]), (t[1], t[2]),
-        ]
-
-    def _sanitize_for_channel(self, name: str) -> str:
-        base = name.lower()
-        base = re.sub(r"[^a-z0-9]+", "-", base)
-        base = base.strip("-")
-        return base or "team"
-
-    async def _create_scheduling_channels(self, guild: discord.Guild, state: dict):
-        cat = guild.get_channel(SCRIM_CATEGORY_ID)
-        if not isinstance(cat, discord.CategoryChannel):
-            return
-
-        groups = state.get("groups", {})
-        for letter, g in groups.items():
-            teams = g.get("teams", [])
-            matches = self._all_group_matches(teams)
-            for t1, t2 in matches:
-                name = f"group-{letter.lower()}-{self._sanitize_for_channel(t1)}-vs-{self._sanitize_for_channel(t2)}"
-                topic = f"{t1} Vs {t2} (Group {letter})"
-
-                # Avoid duplicates: skip if channel already exists
-                exists = discord.utils.get(guild.text_channels, name=name)
-                if exists:
-                    continue
-
-                overwrites: dict[discord.abc.Snowflake, discord.PermissionOverwrite] = {}
-                overwrites[guild.default_role] = discord.PermissionOverwrite(view_channel=False)
-
-                # Try to resolve team roles for view permissions
-                r1, _, _ = resolve_team_any(guild, t1)
-                r2, _, _ = resolve_team_any(guild, t2)
-                if r1:
-                    overwrites[r1] = discord.PermissionOverwrite(view_channel=True, send_messages=True)
-                if r2 and r2 != r1:
-                    overwrites[r2] = discord.PermissionOverwrite(view_channel=True, send_messages=True)
-
-                try:
-                    await guild.create_text_channel(
-                        name=name,
-                        category=cat,
-                        overwrites=overwrites,
-                        topic=topic,
-                        reason=f"Group stage match: {t1} vs {t2} (Group {letter})",
-                    )
-                except Exception:
-                    continue
-
-    def _parse_score_line(self, content: str) -> tuple[str | None, str | None, int | None, int | None]:
+    def _parse_score_line(
+        self, content: str
+    ) -> tuple[str | None, str | None, int | None, int | None]:
         """
         From a /submit score style message, extract:
         winner_name, loser_name, winner_score, loser_score
-        (scores are from 'Score: 3-1').
+        (scores from 'Score: 5-1').
         """
         lines = [ln.strip() for ln in (content or "").splitlines() if ln.strip()]
         if not lines:
@@ -5010,31 +4911,40 @@ def _init_groups_from_teams(self, guild: discord.Guild) -> dict:
 
         return winner_name, loser_name, w_s, l_s
 
-    def _apply_result_to_standings(self, state: dict, winner: str, loser: str, w_s: int | None, l_s: int | None):
+    def _apply_result_to_standings(
+        self,
+        state: dict,
+        winner: str,
+        loser: str,
+        w_s: int | None,
+        l_s: int | None,
+    ):
+        """
+        Update W/L only. DIFF is intentionally left unchanged (stays 0),
+        to match your provided examples.
+        """
         standings = state.setdefault("standings", {})
 
         if winner not in standings or loser not in standings:
-            return  # not a group match
+            return  # not one of the fixed group teams
 
         sw = standings[winner]
         sl = standings[loser]
 
         sw["W"] = sw.get("W", 0) + 1
         sl["L"] = sl.get("L", 0) + 1
-
-        if w_s is not None and l_s is not None:
-            diff = w_s - l_s
-            sw["DIFF"] = sw.get("DIFF", 0) + diff
-            sl["DIFF"] = sl.get("DIFF", 0) - diff
+        # DIFF not modified (always stays 0 in this design)
 
     async def _update_standings_message(self, guild: discord.Guild):
+        """
+        Post the new standings text in GROUPS_CHANNEL_ID,
+        delete the old message (if saved in state).
+        """
         msg_info = self.state.get("message", {})
-        ch_id = msg_info.get("channel_id")
+        ch_id = msg_info.get("channel_id") or GROUPS_CHANNEL_ID
         old_id = msg_info.get("message_id")
 
-        if not ch_id:
-            return
-        ch = guild.get_channel(int(ch_id))
+        ch = guild.get_channel(ch_id) if ch_id else None
         if not isinstance(ch, discord.TextChannel):
             return
 
@@ -5047,16 +4957,18 @@ def _init_groups_from_teams(self, guild: discord.Guild) -> dict:
         except Exception:
             return
 
-        # delete old message
+        # delete old message if exists and is by this bot
         if old_id:
             try:
                 old_msg = await ch.fetch_message(int(old_id))
-                await old_msg.delete()
+                if old_msg.author.id == self.bot.user.id:
+                    await old_msg.delete()
             except Exception:
                 pass
 
-        # store new id
-        self.state.setdefault("message", {})["message_id"] = new_msg.id
+        # store new id and persist
+        self.state.setdefault("message", {})["channel_id"] = ch.id
+        self.state["message"]["message_id"] = new_msg.id
         save_groups_state(self.state)
 
     # ---------- /group command ----------
@@ -5065,7 +4977,7 @@ def _init_groups_from_teams(self, guild: discord.Guild) -> dict:
     @app_commands.default_permissions(administrator=True)
     @app_commands.command(
         name="group",
-        description="Randomly make Groups A–F, create scheduling, and post standings.",
+        description="Post fixed Groups A–F to the groups channel and reset standings.",
     )
     async def group(self, interaction: discord.Interaction):
         guild = interaction.guild
@@ -5087,10 +4999,44 @@ def _init_groups_from_teams(self, guild: discord.Guild) -> dict:
 
         await interaction.response.defer(ephemeral=True, thinking=True)
 
-        # Initialize state from teams
-        self.state = self._init_groups_from_teams(guild)
+        # Reset state to fixed groups
+        self.state = self._init_groups_state()
         self.state["message"]["channel_id"] = out_ch.id
-        self.state["message"]["message_id"]
+
+        # Post initial standings message and save it
+        await self._update_standings_message(guild)
+
+        await interaction.followup.send(f"Groups posted/reset in {out_ch.mention}.", ephemeral=True)
+
+    # ---------- score listener ----------
+
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message):
+        """
+        Listen to MATCH_SCORE_CHANNEL_ID, update standings when
+        a group match is reported and repost the standings message.
+        """
+        if message.author.bot:
+            return
+        if message.guild is None:
+            return
+        if message.channel.id != MATCH_SCORE_CHANNEL_ID:
+            return
+
+        # Ensure we have a groups state (require /group to be run first)
+        if not self.state or "groups" not in self.state or "standings" not in self.state:
+            return
+
+        winner, loser, w_s, l_s = self._parse_score_line(message.content or "")
+        if not winner or not loser:
+            return
+
+        # Apply to current state (only if teams are part of the fixed groups)
+        self._apply_result_to_standings(self.state, winner, loser, w_s, l_s)
+        save_groups_state(self.state)
+
+        # Repost standings in GROUPS_CHANNEL_ID
+        await self._update_standings_message(message.guild)
 
 
 
