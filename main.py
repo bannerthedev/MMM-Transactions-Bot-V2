@@ -4834,10 +4834,10 @@ class GroupStageCog(commands.Cog):
         groups = {
             "A": {"teams": ["Brothers Til Death", "Lynx", "Gelato", "Cute"]},
             "B": {"teams": ["Lyft", "Absolute", "MEOW", "Cutie"]},
-            "C": {"teams": ["Turn To God", "Freaks", "Speedy Monkey Jay", "Supernova"]},
+            "C": {"teams": ["Turn To God", "Freaks", "Speedy Monkey Jay", "Venom"]},
             "D": {"teams": ["Fusion", "Sexy Reapers", "Born 2 Kill", "Obsession"]},
             "E": {"teams": ["Monke Militia", "Suppression", "The Munchers", "The Branching Champs"]},
-            "F": {"teams": ["Luxury", "Symbiote", "After 1", "Faithful Monkeys"]},
+            "F": {"teams": ["Supernova", "Symbiote", "After 1", "Faithful Monkeys"]},
         }
 
         standings: dict[str, dict[str, int]] = {}
