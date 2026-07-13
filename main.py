@@ -483,8 +483,12 @@ def is_team_role(guild: discord.Guild, role: discord.Role) -> bool:
     return False
 
 def get_user_team_role(member: discord.Member) -> discord.Role | None:
-    """Return the team role for this member based ONLY on teams.json, or None."""
+    """Return the team role for this member based on teams.json,
+    falling back to scanning their roles with is_team_role()."""
+
     guild = member.guild
+
+    # --- 1) try teams.json (current behavior) ---
     try:
         teams = load_teams()
     except Exception:
@@ -503,8 +507,16 @@ def get_user_team_role(member: discord.Member) -> discord.Role | None:
         if r and r in member.roles:
             team_roles.append(r)
 
-    # If exactly one team role matches, return it; otherwise None
-    return team_roles[0] if len(team_roles) == 1 else None
+    if len(team_roles) == 1:
+        return team_roles[0]
+
+    # --- 2) fallback: infer from member.roles using is_team_role ---
+    inferred: list[discord.Role] = []
+    for r in member.roles:
+        if is_team_role(guild, r):
+            inferred.append(r)
+
+    return inferred[0] if len(inferred) == 1 else None
 
 
 
