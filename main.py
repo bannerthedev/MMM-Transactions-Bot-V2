@@ -4599,6 +4599,9 @@ class ManageTeam(commands.Cog):
                 roster_locked=ROSTER_LOCKED,
                 admin_override=False,
             )
+            # start with action buttons disabled until a member is selected
+            if not (ROSTER_LOCKED and not view.admin_override):
+                view._set_action_buttons_enabled(False)
 
         if view is not None:
             await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
@@ -4948,10 +4951,10 @@ class AdminManage(commands.Cog):
             admin_override=True,
         )
 
-        if view is not None:
-            await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-        else:
-            await interaction.response.send_message(embed=embed, ephemeral=True)
+        # start with action buttons disabled until selection (admin can still use them once enabled)
+        view._set_action_buttons_enabled(False)
+
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
 
 
