@@ -2504,6 +2504,9 @@ class InviteUserSelect(discord.ui.UserSelect):
         if getattr(team_role, "icon", None):
             embed.set_thumbnail(url=team_role.icon.url)
 
+        # record as pending invite
+        add_pending_invite(team_role.id, target.id)
+
         try:
             await target.send(embed=embed, view=invite_accept_view)
             await interaction.response.send_message(
@@ -2515,7 +2518,6 @@ class InviteUserSelect(discord.ui.UserSelect):
                 "Failed to DM that user (they may have DMs off or blocked the bot).",
                 ephemeral=True,
             )
-
 
 
 
