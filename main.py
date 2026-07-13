@@ -2486,6 +2486,10 @@ class InviteUserSelect(discord.ui.UserSelect):
                     await intr.message.edit(view=self)
                 except Exception:
                     pass
+
+                # remove pending invite record
+                remove_pending_invite(team_role.id, self.target.id)
+
                 try:
                     await intr.response.send_message("You declined the invite.", ephemeral=True)
                 except Exception:
