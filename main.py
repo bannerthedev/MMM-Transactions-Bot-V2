@@ -341,14 +341,14 @@ def save_groups_state(data: dict):
 
 def find_member_team_role(member: discord.Member) -> discord.Role | None:
     """
-    Try hard to find this member's team role:
-    1) If any of their roles is listed in teams.json, use that.
-    2) Otherwise, use is_team_role(...) on their roles.
-    If more than one candidate, pick the highest-position one.
+    Return this member's real team role, based ONLY on teams.json.
+    - Only roles whose IDs appear in teams.json count.
+    - Separator / fake roles like '————————Team Roles————————' are ignored.
+    - If multiple matches, return the highest-position role.
     """
     guild = member.guild
 
-    # 1) From teams.json
+    # Load teams.json
     try:
         teams = load_teams()
     except Exception:
@@ -364,23 +364,30 @@ def find_member_team_role(member: discord.Member) -> discord.Role | None:
         except (TypeError, ValueError):
             continue
 
+    # Helper to detect separator/fake roles by name
+    def _is_fake_team_role(r: discord.Role) -> bool:
+        name = (r.name or "").strip().lower()
+        # obvious separators like '————————Team Roles————————'
+        if "team roles" in name:
+            return True
+        # names that are basically only dashes/lines/underscores/spaces
+        if name and all(ch in "-—_ " for ch in name):
+            return True
+        return False
+
+    # Collect candidate roles that:
+    # - are assigned to the member
+    # - have an ID listed in teams.json
+    # - are not separator/fake roles
     candidates: list[discord.Role] = []
-
-    # roles that appear in teams.json
     for r in member.roles:
-        if r.id in team_ids_from_file:
+        if r.id in team_ids_from_file and not _is_fake_team_role(r):
             candidates.append(r)
-
-    # 2) Fallback: any role that looks like a team role
-    if not candidates:
-        for r in member.roles:
-            if is_team_role(guild, r):
-                candidates.append(r)
 
     if not candidates:
         return None
 
-    # pick the highest role in the role hierarchy
+    # Return the highest role in the guild hierarchy
     return max(candidates, key=lambda r: r.position)
 
 
