@@ -2508,6 +2508,7 @@ class InviteUserSelect(discord.ui.UserSelect):
             await interaction.response.send_message("Invalid selection.", ephemeral=True)
             return
 
+        # We only care about real guild members for team checks
         if isinstance(target, discord.Member):
             if target.bot:
                 await interaction.response.send_message("You cannot invite a bot.", ephemeral=True)
@@ -2521,14 +2522,44 @@ class InviteUserSelect(discord.ui.UserSelect):
                 )
                 return
 
-            # Already on *any* team
-            existing_team = get_user_team_role(target)
-            if existing_team is not None:
+            # ---------- STRICT 'already on a team' check (local, no helper) ----------
+            # Load team role IDs from teams.json
+            try:
+                teams_data = load_teams()
+            except Exception:
+                teams_data = []
+
+            team_ids_from_file: set[int] = set()
+            for entry in teams_data:
+                rid = entry.get("role_id")
+                if not rid:
+                    continue
+                try:
+                    team_ids_from_file.add(int(rid))
+                except (TypeError, ValueError):
+                    continue
+
+            def is_fake_team_role(r: discord.Role) -> bool:
+                name = (r.name or "").strip().lower()
+                if "team roles" in name:
+                    return True
+                if name and all(ch in "-—_ " for ch in name):
+                    return True
+                return False
+
+            already_on_team = False
+            for r in target.roles:
+                if r.id in team_ids_from_file and not is_fake_team_role(r):
+                    already_on_team = True
+                    break
+
+            if already_on_team:
                 await interaction.response.send_message(
                     f"{target.mention} is already on a team.",
                     ephemeral=True,
                 )
                 return
+            # -----------------------------------------------------------------
 
         team_role = self.parent_view.team_role
         team_name = team_role.name
@@ -2548,10 +2579,8 @@ class InviteUserSelect(discord.ui.UserSelect):
 
             @discord.ui.button(label="Accept", style=discord.ButtonStyle.success)
             async def accept(self, intr: discord.Interaction, btn: discord.ui.Button):
-                # We are in DMs, so intr.guild is None. Use the team role's guild.
                 guild = team_role.guild
 
-                # get member in that guild
                 member_obj = guild.get_member(self.target.id)
                 if member_obj is None:
                     try:
@@ -2569,7 +2598,6 @@ class InviteUserSelect(discord.ui.UserSelect):
                         pass
                     return
 
-                # add team role + TEAM_PLAYER_ROLE
                 roles_to_add = [team_role]
                 team_player_role = guild.get_role(TEAM_PLAYER_ROLE_ID)
                 if team_player_role and team_player_role not in roles_to_add:
@@ -2581,10 +2609,12 @@ class InviteUserSelect(discord.ui.UserSelect):
                         reason=f"Accepted invite to {team_name}",
                     )
                 except Exception:
-                    # even if role add fails, still try to update the UI
                     pass
 
-                # disable buttons on the original DM message
+                # remove pending invite record
+                remove_pending_invite(team_role.id, self.target.id)
+
+                # disable buttons
                 for child in self.children:
                     if isinstance(child, discord.ui.Button):
                         child.disabled = True
@@ -2593,20 +2623,14 @@ class InviteUserSelect(discord.ui.UserSelect):
                 except Exception:
                     pass
 
-                # reply to that same DM message with confirmation
                 try:
                     await intr.message.reply(f"You joined {team_name}!")
                 except Exception:
-                    # fallback if reply fails
                     try:
                         await intr.followup.send(f"You joined {team_name}!")
                     except Exception:
                         pass
-                        
-                # remove pending invite record
-                remove_pending_invite(team_role.id, self.target.id)
 
-                # transactions: "@user Has Joined **Team**"
                 try:
                     tx_ch = guild.get_channel(TRANSACTIONS_CHANNEL_ID)
                     if isinstance(tx_ch, discord.TextChannel):
@@ -2618,7 +2642,6 @@ class InviteUserSelect(discord.ui.UserSelect):
 
             @discord.ui.button(label="Decline", style=discord.ButtonStyle.danger)
             async def decline(self, intr: discord.Interaction, btn: discord.ui.Button):
-                # disable buttons when declined
                 for child in self.children:
                     if isinstance(child, discord.ui.Button):
                         child.disabled = True
@@ -2638,26 +2661,22 @@ class InviteUserSelect(discord.ui.UserSelect):
 
         invite_accept_view = InviteAcceptView(target)
 
-        # Build DM embed
-        # Color: use team role's color (from its hex); fallback to blurple
         embed_color = team_role.colour or discord.Color.blurple()
         embed = discord.Embed(
             title=f"You've been invited to {team_name}",
             description=f"{captain_disp} invited you to join {team_name}. Use the buttons below to respond.",
             color=embed_color,
         )
-
-        # If the team has a role icon, show it as thumbnail
         if getattr(team_role, "icon", None):
             embed.set_thumbnail(url=team_role.icon.url)
 
-        # record as pending invite
+        # record pending invite
         add_pending_invite(team_role.id, target.id)
 
         try:
             await target.send(embed=embed, view=invite_accept_view)
             await interaction.response.send_message(
-                f"Tell {target.mention} to check their DMs with the bot",
+                f"Tell {target.mention} to check their DMs with the bot.",
                 ephemeral=True,
             )
         except Exception:
