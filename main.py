@@ -4434,6 +4434,8 @@ class ManageTeam(commands.Cog):
             return
 
         member = interaction.user
+
+        # uses the improved get_user_team_role (with fallback scanning)
         team_role = get_user_team_role(member)
         if team_role is None:
             await interaction.response.send_message("You are not on a team.", ephemeral=True)
@@ -4441,21 +4443,53 @@ class ManageTeam(commands.Cog):
 
         data = await get_team_data(team_role, guild)
 
+        max_roster = CONFIG.get("roster_rules", {}).get("max_roster", 12)
         embed_color = team_role.colour if getattr(team_role, "colour", None) else discord.Color.blurple()
-        embed = discord.Embed(title=f"Roster for {data['name']}", description="Team roster", color=embed_color)
+        embed = discord.Embed(
+            title=f"Roster for {data['name']}",
+            description="Team roster",
+            color=embed_color,
+        )
 
-        embed.add_field(name="Team Executive", value=format_list_arrow([data["executive"]]), inline=False)
-        embed.add_field(name="Captain", value=format_list_arrow([data["captain"]]), inline=False)
-        embed.add_field(name="Co-Captains", value=format_list_arrow(data.get("co_captains", [])), inline=False)
+        # executive (single string) + lists
+        embed.add_field(
+            name="Team Executive",
+            value=format_list_arrow([data["executive"]]),
+            inline=False,
+        )
+        embed.add_field(
+            name="Captain",
+            value=format_list_arrow([data["captain"]]),
+            inline=False,
+        )
+        embed.add_field(
+            name="Co-Captains",
+            value=format_list_arrow([m.mention for m in data.get("co_captains", [])]),
+            inline=False,
+        )
 
         players = data.get("players", [])
-        player_mentions = [p.mention for p in players[:12]]
-        embed.add_field(name="Players", value=format_list_arrow(player_mentions), inline=False)
+        player_mentions = [p.mention for p in players[:max_roster]]
+        embed.add_field(
+            name="Players",
+            value=format_list_arrow(player_mentions),
+            inline=False,
+        )
+        embed.add_field(
+            name="\u200b",
+            value=f"{len(players)}/{max_roster}",
+            inline=False,
+        )
 
-        embed.add_field(name="\u200b", value=f"{len(players)}/12", inline=False)
+        # pending invites (mentions or strings prepared by get_team_data)
         pending = data.get("pending_invites", [])
         pending_text = ", ".join(str(x) for x in pending) if pending else "None"
-        embed.add_field(name="Pending invites", value=pending_text, inline=False)
+        embed.add_field(
+            name="Pending invites",
+            value=pending_text,
+            inline=False,
+        )
+
         embed.set_footer(text=team_role.name)
 
         can_captain = has_role_id(member, CAPTAIN_ROLE_ID)
