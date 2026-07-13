@@ -2622,8 +2622,9 @@ class ManageTeamView(discord.ui.View):
         self.invoker_id = invoker_id
         self.admin_override = admin_override
         self.players = players
+        self._roster_locked = roster_locked
 
-        # member select for kick/promote/assign/transfer
+        # Member select for kick/promote/assign/transfer
         if players:
             member_select = discord.ui.Select(
                 placeholder="Select member",
@@ -2640,8 +2641,10 @@ class ManageTeamView(discord.ui.View):
                 target_id = int(sel_inter.data["values"][0])
                 SELECTED_MEMBER_CACHE[(sel_inter.user.id, self.team_role.id)] = target_id
 
-                # enable action buttons once a member is selected
-                self._set_action_buttons_enabled(True)
+                # Enable action buttons once a member is selected,
+                # unless roster is locked for non-admins
+                if not (self._roster_locked and not self.admin_override):
+                    self._set_action_buttons_enabled(True)
 
                 try:
                     await sel_inter.response.send_message(
@@ -2654,19 +2657,11 @@ class ManageTeamView(discord.ui.View):
             member_select.callback = member_cb
             self.add_item(member_select)
 
-        # If roster is locked, disable buttons for normal users (but not admins).
-        if roster_locked and not self.admin_override:
-            for child in list(self.children):
-                if isinstance(child, discord.ui.Button):
-                    if child.label == "Edit Team Info":
-                        continue
-                    child.disabled = True
-        else:
-            # roster not locked: start with action buttons disabled until selection
-            self._set_action_buttons_enabled(False)
-
     def _set_action_buttons_enabled(self, enabled: bool):
-        """Enable/disable Kick / Promote / Assign exec / Transfer buttons."""
+        """
+        Enable/disable Kick / Promote / Assign exec / Transfer buttons.
+        Does not affect Invite, Disband, Edit buttons.
+        """
         target_labels = {
             "Kick member",
             "Promote to co-captain",
@@ -2692,6 +2687,8 @@ class ManageTeamView(discord.ui.View):
                 await ch.send(content)
         except Exception:
             pass
+
+    # ----------------- BUTTONS -----------------
 
     @discord.ui.button(label="Invite", style=discord.ButtonStyle.success, custom_id="mt_invite_button")
     async def invite_button(self, interaction: discord.Interaction, button: discord.ui.Button):
