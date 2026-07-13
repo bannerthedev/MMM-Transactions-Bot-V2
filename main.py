@@ -1985,27 +1985,39 @@ class LeaveCog(commands.Cog):
         self.bot = bot
 
     @app_commands.guilds(Object(id=TEST_GUILD_ID))
-    @app_commands.command(name="leave", description="Leave your team (players, co-captains, executives, captains).")
+    @app_commands.command(
+        name="leave",
+        description="Leave your team (players, co-captains, executives, captains).",
+    )
     async def leave(self, interaction: discord.Interaction):
         guild = interaction.guild
         if guild is None:
-            await interaction.response.send_message("Use this in a server.", ephemeral=True)
+            await interaction.response.send_message(
+                "Use this in a server.",
+                ephemeral=True,
+            )
             return
 
-        # resolve member object
+        # resolve member
         try:
             member = guild.get_member(interaction.user.id) or await guild.fetch_member(interaction.user.id)
         except Exception:
             member = None
 
         if member is None:
-            await interaction.response.send_message("Could not resolve your member object.", ephemeral=True)
+            await interaction.response.send_message(
+                "Could not resolve your member object.",
+                ephemeral=True,
+            )
             return
 
-        # use robust helper
+        # find team role ONLY from teams.json (using helper)
         team_role = find_member_team_role(member)
         if team_role is None:
-            await interaction.response.send_message("You are not on a team.", ephemeral=True)
+            await interaction.response.send_message(
+                "You are not on a team.",
+                ephemeral=True,
+            )
             return
 
         is_captain = has_role_id(member, CAPTAIN_ROLE_ID)
@@ -2020,9 +2032,9 @@ class LeaveCog(commands.Cog):
             )
             return
 
-        # If captain, require transfer or disallow if no candidates
+        # -------- captain case: must transfer captain first --------
         if is_captain:
-            candidates = []
+            candidates: list[discord.Member] = []
             for m in guild.members:
                 if m.bot:
                     continue
@@ -2037,7 +2049,7 @@ class LeaveCog(commands.Cog):
 
             if not candidates:
                 await interaction.response.send_message(
-                    "You are the captain and there are no co-captains/executives to transfer to. "
+                    "You are the captain and there are no co-captains/executives to transfer to.\n"
                     "Please transfer captain to someone or disband the team before leaving.",
                     ephemeral=True,
                 )
@@ -2062,18 +2074,31 @@ class LeaveCog(commands.Cog):
                 new_id = int(sel_int.data["values"][0])
                 new_member = guild.get_member(new_id)
                 if new_member is None:
-                    await sel_int.response.send_message("Selected member not found.", ephemeral=True)
+                    await sel_int.response.send_message(
+                        "Selected member not found.",
+                        ephemeral=True,
+                    )
                     return
 
                 cap_role = guild.get_role(CAPTAIN_ROLE_ID)
                 if cap_role is None:
-                    await sel_int.response.send_message("Captain role not configured on this server.", ephemeral=True)
+                    await sel_int.response.send_message(
+                        "Captain role not configured on this server.",
+                        ephemeral=True,
+                    )
                     return
 
+                # transfer captain
                 try:
                     if cap_role in member.roles:
-                        await member.remove_roles(cap_role, reason=f"Transferred captain via /leave by {member}")
-                    await new_member.add_roles(cap_role, reason=f"Promoted to captain by {member} via /leave")
+                        await member.remove_roles(
+                            cap_role,
+                            reason=f"Transferred captain via /leave by {member}",
+                        )
+                    await new_member.add_roles(
+                        cap_role,
+                        reason=f"Promoted to captain by {member} via /leave",
+                    )
                 except Exception:
                     await sel_int.response.send_message(
                         "Failed to transfer captain role (missing Manage Roles?).",
@@ -2081,8 +2106,8 @@ class LeaveCog(commands.Cog):
                     )
                     return
 
-                # remove leaver's team + relevant global roles
-                roles_to_remove = []
+                # now remove leaver's team + global roles
+                roles_to_remove: list[discord.Role] = []
                 if team_role in member.roles:
                     roles_to_remove.append(team_role)
                 for rid in (CO_CAPTAIN_ROLE_ID, TEAM_EXEC_ROLE_ID, TEAM_PLAYER_ROLE_ID):
@@ -2103,6 +2128,7 @@ class LeaveCog(commands.Cog):
                     )
                     return
 
+                # log
                 try:
                     tx = guild.get_channel(TRANSACTIONS_CHANNEL_ID)
                     if isinstance(tx, discord.TextChannel):
@@ -2125,8 +2151,8 @@ class LeaveCog(commands.Cog):
             )
             return
 
-        # Not a captain — just remove roles
-        roles_to_remove = []
+        # -------- non-captain: just remove roles --------
+        roles_to_remove: list[discord.Role] = []
         if team_role in member.roles:
             roles_to_remove.append(team_role)
         for rid in (CO_CAPTAIN_ROLE_ID, TEAM_EXEC_ROLE_ID, TEAM_PLAYER_ROLE_ID):
@@ -2147,6 +2173,7 @@ class LeaveCog(commands.Cog):
             )
             return
 
+        # log
         try:
             tx = guild.get_channel(TRANSACTIONS_CHANNEL_ID)
             if isinstance(tx, discord.TextChannel):
@@ -2624,7 +2651,7 @@ class ManageTeamView(discord.ui.View):
         self.players = players
         self._roster_locked = roster_locked
 
-        # Member select for kick/promote/assign/transfer
+        # Member select
         if players:
             member_select = discord.ui.Select(
                 placeholder="Select member",
@@ -2638,13 +2665,12 @@ class ManageTeamView(discord.ui.View):
                 if self.invoker_id and not self.admin_override and sel_inter.user.id != self.invoker_id:
                     await sel_inter.response.send_message("This panel is not for you.", ephemeral=True)
                     return
+
                 target_id = int(sel_inter.data["values"][0])
                 SELECTED_MEMBER_CACHE[(sel_inter.user.id, self.team_role.id)] = target_id
 
-                # Enable action buttons once a member is selected,
-                # unless roster is locked for non-admins
-                if not (self._roster_locked and not self.admin_override):
-                    self._set_action_buttons_enabled(True)
+                # enable action buttons once a member is selected
+                self._set_action_buttons_enabled(True)
 
                 try:
                     await sel_inter.response.send_message(
@@ -2657,11 +2683,11 @@ class ManageTeamView(discord.ui.View):
             member_select.callback = member_cb
             self.add_item(member_select)
 
+        # start with action buttons disabled (they’ll be enabled after select)
+        self._set_action_buttons_enabled(False)
+
     def _set_action_buttons_enabled(self, enabled: bool):
-        """
-        Enable/disable Kick / Promote / Assign exec / Transfer buttons.
-        Does not affect Invite, Disband, Edit buttons.
-        """
+        """Enable/disable Kick / Promote / Assign Exec / Transfer buttons."""
         target_labels = {
             "Kick member",
             "Promote to co-captain",
@@ -2688,7 +2714,7 @@ class ManageTeamView(discord.ui.View):
         except Exception:
             pass
 
-    # ----------------- BUTTONS -----------------
+    # --------------- BUTTONS ----------------
 
     @discord.ui.button(label="Invite", style=discord.ButtonStyle.success, custom_id="mt_invite_button")
     async def invite_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -2717,7 +2743,7 @@ class ManageTeamView(discord.ui.View):
             return
         sel_id = self._get_selected_member(interaction.user.id)
         if not sel_id:
-            await interaction.response.send_message("No member selected. Use the dropdown to select a member first.", ephemeral=True)
+            await interaction.response.send_message("No member selected. Use the dropdown first.", ephemeral=True)
             return
         guild = interaction.guild
         if guild is None:
@@ -2749,7 +2775,7 @@ class ManageTeamView(discord.ui.View):
             return
         sel_id = self._get_selected_member(interaction.user.id)
         if not sel_id:
-            await interaction.response.send_message("No member selected. Use the dropdown to select a member first.", ephemeral=True)
+            await interaction.response.send_message("No member selected. Use the dropdown first.", ephemeral=True)
             return
         guild = interaction.guild
         member = guild.get_member(sel_id) if guild else None
@@ -2774,7 +2800,7 @@ class ManageTeamView(discord.ui.View):
             return
         sel_id = self._get_selected_member(interaction.user.id)
         if not sel_id:
-            await interaction.response.send_message("No member selected. Use the dropdown to select a member first.", ephemeral=True)
+            await interaction.response.send_message("No member selected. Use the dropdown first.", ephemeral=True)
             return
         guild = interaction.guild
         member = guild.get_member(sel_id) if guild else None
@@ -2868,12 +2894,14 @@ class ManageTeamView(discord.ui.View):
             if guild is None:
                 await i.response.send_message("Guild not found.", ephemeral=True)
                 return
+
             # delete team role
             try:
                 await self.team_role.delete(reason=f"Disbanded by {i.user}")
             except Exception:
                 pass
-            # remove team role and team player from members
+
+            # remove team role and Team Player from members
             team_player_role = guild.get_role(TEAM_PLAYER_ROLE_ID)
             for m in list(guild.members):
                 if self.team_role in m.roles:
@@ -2884,6 +2912,7 @@ class ManageTeamView(discord.ui.View):
                         await m.remove_roles(*to_remove, reason="Team disbanded")
                     except Exception:
                         pass
+
             await i.response.send_message("Team disbanded.", ephemeral=True)
             await self._tx(guild, f"# {self.team_role.name} HAS BEEN DISBANDED\n\n")
             confirm_view.stop()
@@ -2898,7 +2927,12 @@ class ManageTeamView(discord.ui.View):
         no.callback = no_cb
         confirm_view.add_item(yes)
         confirm_view.add_item(no)
-        await interaction.response.send_message("Are you sure you want to disband your team?", view=confirm_view, ephemeral=True)
+
+        await interaction.response.send_message(
+            "Are you sure you want to disband your team?",
+            view=confirm_view,
+            ephemeral=True,
+        )
 
     @discord.ui.button(label="Edit Team Info", style=discord.ButtonStyle.secondary, custom_id="mt_edit_button")
     async def edit_info(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -2907,12 +2941,36 @@ class ManageTeamView(discord.ui.View):
             return
 
         options = []
-        options.append(discord.SelectOption(label="Team Profile Picture", description="Set a profile picture (URL).", value="pfp"))
+        # Available to captains via /manage-team, and to admins via /admin-manage
+        options.append(
+            discord.SelectOption(
+                label="Team Profile Picture",
+                description="Set a profile picture (URL).",
+                value="pfp",
+            )
+        )
         if self.admin_override:
-            options.append(discord.SelectOption(label="Change Team Color", description="Update the team's color code in hex.", value="color"))
-            options.append(discord.SelectOption(label="Change Team Name", description="Rename the team and log the rebrand.", value="name"))
+            options.append(
+                discord.SelectOption(
+                    label="Change Team Color",
+                    description="Update the team's color code in hex.",
+                    value="color",
+                )
+            )
+            options.append(
+                discord.SelectOption(
+                    label="Change Team Name",
+                    description="Rename the team and log the rebrand.",
+                    value="name",
+                )
+            )
 
-        sel = discord.ui.Select(placeholder="Edit option", options=options, min_values=1, max_values=1)
+        sel = discord.ui.Select(
+            placeholder="Edit option",
+            options=options,
+            min_values=1,
+            max_values=1,
+        )
 
         async def sel_cb(sel_int: discord.Interaction):
             choice = sel_int.data["values"][0]
@@ -2920,20 +2978,43 @@ class ManageTeamView(discord.ui.View):
 
             if choice == "name":
                 class NameModal(discord.ui.Modal, title="Change Team Name"):
-                    new_name = discord.ui.TextInput(label="What is your new team's name?", required=True, max_length=100)
+                    new_name = discord.ui.TextInput(
+                        label="What is your new team's name?",
+                        required=True,
+                        max_length=100,
+                    )
+
                     async def on_submit(self, modal_inter: discord.Interaction):
                         old = self_view.team_role.name
                         try:
-                            await self_view.team_role.edit(name=self.new_name.value, reason=f"Team rename by {modal_inter.user}")
-                            await modal_inter.response.send_message(f"Team renamed to {self.new_name.value}.", ephemeral=True)
-                            await self_view._tx(modal_inter.guild, f"# TEAM HAS REBANED\n*** Old Name: {old} New Name: {self.new_name.value} ***")
+                            await self_view.team_role.edit(
+                                name=self.new_name.value,
+                                reason=f"Team rename by {modal_inter.user}",
+                            )
+                            await modal_inter.response.send_message(
+                                f"Team renamed to {self.new_name.value}.",
+                                ephemeral=True,
+                            )
+                            await self_view._tx(
+                                modal_inter.guild,
+                                f"# TEAM HAS REBANED\n*** Old Name: {old} New Name: {self.new_name.value} ***",
+                            )
                         except Exception:
-                            await modal_inter.response.send_message("Failed to rename team (missing perms?).", ephemeral=True)
+                            await modal_inter.response.send_message(
+                                "Failed to rename team (missing perms?).",
+                                ephemeral=True,
+                            )
+
                 await sel_int.response.send_modal(NameModal())
 
             elif choice == "color":
                 class ColorModal(discord.ui.Modal, title="Change Team Color"):
-                    color = discord.ui.TextInput(label="What is your new Teams Color code (in hex):", required=True, max_length=7)
+                    color = discord.ui.TextInput(
+                        label="What is your new team's color code (in hex):",
+                        required=True,
+                        max_length=7,
+                    )
+
                     async def on_submit(self, modal_inter: discord.Interaction):
                         new_code = self.color.value.strip()
                         if not new_code.startswith("#"):
@@ -2941,20 +3022,38 @@ class ManageTeamView(discord.ui.View):
                         try:
                             color_int = int(new_code[1:], 16)
                         except Exception:
-                            await modal_inter.response.send_message("Invalid color code.", ephemeral=True)
+                            await modal_inter.response.send_message(
+                                "Invalid color code.", ephemeral=True
+                            )
                             return
                         old_col = self_view.team_role.colour
                         try:
-                            await self_view.team_role.edit(colour=discord.Colour(color_int), reason=f"Team color change by {modal_inter.user}")
-                            await modal_inter.response.send_message("Team color updated.", ephemeral=True)
-                            await self_view._tx(modal_inter.guild, f"# TEAM HAS CHANGE THERE COLOR CODE\n***• Old Color Code: {old_col} New Color Code: {new_code} ***")
+                            await self_view.team_role.edit(
+                                colour=discord.Colour(color_int),
+                                reason=f"Team color change by {modal_inter.user}",
+                            )
+                            await modal_inter.response.send_message(
+                                "Team color updated.", ephemeral=True
+                            )
+                            await self_view._tx(
+                                modal_inter.guild,
+                                f"# TEAM HAS CHANGE THERE COLOR CODE\n***• Old Color Code: {old_col} New Color Code: {new_code} ***",
+                            )
                         except Exception:
-                            await modal_inter.response.send_message("Failed to change color (missing perms?).", ephemeral=True)
+                            await modal_inter.response.send_message(
+                                "Failed to change color (missing perms?).",
+                                ephemeral=True,
+                            )
+
                 await sel_int.response.send_modal(ColorModal())
 
             elif choice == "pfp":
                 class PFPModal(discord.ui.Modal, title="Set Team Profile Picture"):
-                    url = discord.ui.TextInput(label="What is your new team's pfp? (URL)", required=True)
+                    url = discord.ui.TextInput(
+                        label="What is your new team's pfp? (URL)",
+                        required=True,
+                    )
+
                     async def on_submit(self, modal_inter: discord.Interaction):
                         url_val = self.url.value.strip()
                         try:
@@ -2962,36 +3061,63 @@ class ManageTeamView(discord.ui.View):
                             async with aiohttp.ClientSession() as sess:
                                 async with sess.get(url_val, timeout=15) as resp:
                                     if resp.status != 200:
-                                        await modal_inter.response.send_message("Failed to download image from URL.", ephemeral=True)
+                                        await modal_inter.response.send_message(
+                                            "Failed to download image from URL.",
+                                            ephemeral=True,
+                                        )
                                         return
                                     data = await resp.read()
                         except Exception:
-                            await modal_inter.response.send_message("Failed to download image from URL.", ephemeral=True)
+                            await modal_inter.response.send_message(
+                                "Failed to download image from URL.",
+                                ephemeral=True,
+                            )
                             return
 
                         created_emoji = None
                         try:
-                            await self_view.team_role.edit(reason=f"Team pfp set by {modal_inter.user}", icon=data)
-                            await modal_inter.response.send_message("Team PFP set as role icon (if supported).", ephemeral=True)
+                            await self_view.team_role.edit(
+                                reason=f"Team pfp set by {modal_inter.user}",
+                                icon=data,
+                            )
+                            await modal_inter.response.send_message(
+                                "Team PFP set as role icon (if supported).",
+                                ephemeral=True,
+                            )
                         except Exception:
                             try:
                                 import re
-                                name_safe = re.sub(r"[^0-9A-Za-z_]", "_", self_view.team_role.name)[:32] or "teamimg"
-                                created_emoji = await modal_inter.guild.create_custom_emoji(name=name_safe, image=data, reason="Team pfp uploaded")
+                                name_safe = re.sub(
+                                    r"[^0-9A-Za-z_]", "_", self_view.team_role.name
+                                )[:32] or "teamimg"
+                                created_emoji = await modal_inter.guild.create_custom_emoji(
+                                    name=name_safe,
+                                    image=data,
+                                    reason="Team pfp uploaded",
+                                )
                             except Exception:
                                 created_emoji = None
 
                             if created_emoji:
-                                await modal_inter.response.send_message(f"Team PFP uploaded as emoji: {created_emoji}", ephemeral=True)
+                                await modal_inter.response.send_message(
+                                    f"Team PFP uploaded as emoji: {created_emoji}",
+                                    ephemeral=True,
+                                )
                             else:
-                                await modal_inter.response.send_message("Team PFP updated (or attempt made). If nothing changed, check bot permissions.", ephemeral=True)
+                                await modal_inter.response.send_message(
+                                    "Team PFP updated (or attempt made). "
+                                    "If nothing changed, check bot permissions.",
+                                    ephemeral=True,
+                                )
 
                 await sel_int.response.send_modal(PFPModal())
 
         sel.callback = sel_cb
         v = discord.ui.View(timeout=60)
         v.add_item(sel)
-        await interaction.response.send_message("Choose edit action:", view=v, ephemeral=True)
+        await interaction.response.send_message(
+            "Choose edit action:", view=v, ephemeral=True
+        )
 
 
 
