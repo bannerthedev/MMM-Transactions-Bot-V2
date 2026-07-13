@@ -2462,6 +2462,9 @@ class InviteUserSelect(discord.ui.UserSelect):
                         await intr.followup.send(f"You joined {team_name}!")
                     except Exception:
                         pass
+                        
+                # remove pending invite record
+                remove_pending_invite(team_role.id, self.target.id)
 
                 # transactions: "@user Has Joined **Team**"
                 try:
