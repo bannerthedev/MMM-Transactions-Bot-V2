@@ -2632,7 +2632,6 @@ class InviteUserSelect(discord.ui.UserSelect):
             )
 
 
-
 class ManageTeamView(discord.ui.View):
     def __init__(
         self,
@@ -2657,22 +2656,31 @@ class ManageTeamView(discord.ui.View):
                 placeholder="Select member",
                 min_values=1,
                 max_values=1,
-                options=[discord.SelectOption(label=p.display_name, value=str(p.id)) for p in players][:25],
-                custom_id=f"mt:{team_role.id}:member"
+                options=[
+                    discord.SelectOption(label=p.display_name, value=str(p.id))
+                    for p in players
+                ][:25],
+                custom_id=f"mt:{team_role.id}:member",
             )
 
             async def member_cb(sel_inter: discord.Interaction, *, _select=member_select):
-                if self.invoker_id and not self.admin_override and sel_inter.user.id != self.invoker_id:
-                    await sel_inter.response.send_message("This panel is not for you.", ephemeral=True)
+                if (
+                    self.invoker_id
+                    and not self.admin_override
+                    and sel_inter.user.id != self.invoker_id
+                ):
+                    await sel_inter.response.send_message(
+                        "This panel is not for you.", ephemeral=True
+                    )
                     return
 
                 target_id = int(sel_inter.data["values"][0])
                 SELECTED_MEMBER_CACHE[(sel_inter.user.id, self.team_role.id)] = target_id
 
-                # enable action buttons once a member is selected
+                # Enable only the action buttons
                 self._set_action_buttons_enabled(True)
 
-                # IMPORTANT: push updated view to the message so UI actually changes
+                # Update the original message so buttons actually change visually
                 try:
                     await sel_inter.message.edit(view=self)
                 except Exception:
@@ -2689,11 +2697,20 @@ class ManageTeamView(discord.ui.View):
             member_select.callback = member_cb
             self.add_item(member_select)
 
-        # start with action buttons disabled (they’ll be enabled after select)
+        # Start with action buttons disabled.
+        # This only affects the 4 action buttons (not Invite / Disband / Edit).
         self._set_action_buttons_enabled(False)
 
     def _set_action_buttons_enabled(self, enabled: bool):
-        """Enable/disable Kick / Promote / Assign Exec / Transfer buttons."""
+        """
+        Enable/disable ONLY these four buttons:
+        - Kick member
+        - Promote to co-captain
+        - Assign executive
+        - Transfer captain
+
+        Invite, Disband, Edit Team Info are never touched here.
+        """
         target_labels = {
             "Kick member",
             "Promote to co-captain",
@@ -2724,6 +2741,7 @@ class ManageTeamView(discord.ui.View):
 
     @discord.ui.button(label="Invite", style=discord.ButtonStyle.success, custom_id="mt_invite_button")
     async def invite_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # ALWAYS enabled
         if self.invoker_id and not self.admin_override and interaction.user.id != self.invoker_id:
             await interaction.response.send_message("This panel is not for you.", ephemeral=True)
             return
@@ -2744,88 +2762,139 @@ class ManageTeamView(discord.ui.View):
 
     @discord.ui.button(label="Kick member", style=discord.ButtonStyle.danger, custom_id="mt_kick_button")
     async def kick_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # starts disabled until member selected
         if self.invoker_id and not self.admin_override and interaction.user.id != self.invoker_id:
             await interaction.response.send_message("This panel is not for you.", ephemeral=True)
             return
+
         sel_id = self._get_selected_member(interaction.user.id)
         if not sel_id:
-            await interaction.response.send_message("No member selected. Use the dropdown first.", ephemeral=True)
+            await interaction.response.send_message(
+                "No member selected. Use the dropdown to select a member first.",
+                ephemeral=True,
+            )
             return
+
         guild = interaction.guild
         if guild is None:
             await interaction.response.send_message("Use in server.", ephemeral=True)
             return
+
         member = guild.get_member(sel_id)
         if member is None:
             await interaction.response.send_message("Member not found.", ephemeral=True)
             return
+
         roles_to_remove = []
         if self.team_role in member.roles:
             roles_to_remove.append(self.team_role)
         team_player_role = guild.get_role(TEAM_PLAYER_ROLE_ID)
         if team_player_role and team_player_role in member.roles:
             roles_to_remove.append(team_player_role)
+
         try:
             if roles_to_remove:
-                await member.remove_roles(*roles_to_remove, reason=f"Kicked from {self.team_role.name} by {interaction.user}")
+                await member.remove_roles(
+                    *roles_to_remove,
+                    reason=f"Kicked from {self.team_role.name} by {interaction.user}",
+                )
         except Exception:
-            await interaction.response.send_message("Failed to remove roles (missing perms?).", ephemeral=True)
+            await interaction.response.send_message(
+                "Failed to remove roles (missing perms?).",
+                ephemeral=True,
+            )
             return
-        await interaction.response.send_message(f"{member.mention} kicked from {self.team_role.mention}.", ephemeral=True)
+
+        await interaction.response.send_message(
+            f"{member.mention} kicked from {self.team_role.mention}.",
+            ephemeral=True,
+        )
         await self._tx(guild, f"{member.mention} Has Been kicked from **{self.team_role.name}**")
 
     @discord.ui.button(label="Promote to co-captain", style=discord.ButtonStyle.primary, custom_id="mt_promote_co_button")
     async def promote_co(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # starts disabled until member selected
         if self.invoker_id and not self.admin_override and interaction.user.id != self.invoker_id:
             await interaction.response.send_message("This panel is not for you.", ephemeral=True)
             return
+
         sel_id = self._get_selected_member(interaction.user.id)
         if not sel_id:
-            await interaction.response.send_message("No member selected. Use the dropdown first.", ephemeral=True)
+            await interaction.response.send_message(
+                "No member selected. Use the dropdown to select a member first.",
+                ephemeral=True,
+            )
             return
+
         guild = interaction.guild
         member = guild.get_member(sel_id) if guild else None
         if member is None:
             await interaction.response.send_message("Member not found.", ephemeral=True)
             return
+
         co_role = guild.get_role(CO_CAPTAIN_ROLE_ID)
         if co_role is None:
             await interaction.response.send_message("Co-captain role not configured.", ephemeral=True)
             return
+
         try:
             await member.add_roles(co_role, reason=f"Promoted to co-captain by {interaction.user}")
-            await interaction.response.send_message(f"{member.mention} promoted to co-captain.", ephemeral=True)
+            await interaction.response.send_message(
+                f"{member.mention} promoted to co-captain.",
+                ephemeral=True,
+            )
             await self._tx(guild, f"{member.mention} Has Been Promoted to Co-captain")
         except Exception:
-            await interaction.response.send_message("Failed to add co-captain role (missing perms?).", ephemeral=True)
+            await interaction.response.send_message(
+                "Failed to add co-captain role (missing perms?).",
+                ephemeral=True,
+            )
 
     @discord.ui.button(label="Assign executive", style=discord.ButtonStyle.primary, custom_id="mt_assign_exec_button")
     async def assign_exec(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # starts disabled until member selected
         if self.invoker_id and not self.admin_override and interaction.user.id != self.invoker_id:
             await interaction.response.send_message("This panel is not for you.", ephemeral=True)
             return
+
         sel_id = self._get_selected_member(interaction.user.id)
         if not sel_id:
-            await interaction.response.send_message("No member selected. Use the dropdown first.", ephemeral=True)
+            await interaction.response.send_message(
+                "No member selected. Use the dropdown to select a member first.",
+                ephemeral=True,
+            )
             return
+
         guild = interaction.guild
         member = guild.get_member(sel_id) if guild else None
         if member is None:
             await interaction.response.send_message("Member not found.", ephemeral=True)
             return
+
         exec_role = guild.get_role(TEAM_EXEC_ROLE_ID)
         if exec_role is None:
-            await interaction.response.send_message("Team executive role not configured.", ephemeral=True)
+            await interaction.response.send_message(
+                "Team executive role not configured.",
+                ephemeral=True,
+            )
             return
+
         try:
             await member.add_roles(exec_role, reason=f"Assigned executive by {interaction.user}")
-            await interaction.response.send_message(f"{member.mention} assigned as team executive.", ephemeral=True)
+            await interaction.response.send_message(
+                f"{member.mention} assigned as team executive.",
+                ephemeral=True,
+            )
             await self._tx(guild, f"{member.mention} Has Been Promoted to Team executive")
         except Exception:
-            await interaction.response.send_message("Failed to add executive role (missing perms?).", ephemeral=True)
+            await interaction.response.send_message(
+                "Failed to add executive role (missing perms.).",
+                ephemeral=True,
+            )
 
     @discord.ui.button(label="Transfer captain", style=discord.ButtonStyle.danger, custom_id="mt_transfer_captain_button")
     async def transfer_captain(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # starts disabled until member selected
         if self.invoker_id and not self.admin_override and interaction.user.id != self.invoker_id:
             await interaction.response.send_message("This panel is not for you.", ephemeral=True)
             return
@@ -2847,10 +2916,18 @@ class ManageTeamView(discord.ui.View):
                     break
 
         if not candidates:
-            await interaction.response.send_message("No co-captain/executive candidates available to transfer to.", ephemeral=True)
+            await interaction.response.send_message(
+                "No co-captain/executive candidates available to transfer to.",
+                ephemeral=True,
+            )
             return
 
-        sel = discord.ui.Select(placeholder="Select new captain", options=candidates, min_values=1, max_values=1)
+        sel = discord.ui.Select(
+            placeholder="Select new captain",
+            options=candidates,
+            min_values=1,
+            max_values=1,
+        )
 
         async def sel_cb(sel_int: discord.Interaction):
             new_id = int(sel_int.data["values"][0])
@@ -2872,23 +2949,39 @@ class ManageTeamView(discord.ui.View):
 
             try:
                 if old_capt and cap_role in old_capt.roles:
-                    await old_capt.remove_roles(cap_role, reason=f"Transferred captain to {new_member}")
-                await new_member.add_roles(cap_role, reason=f"Promoted to captain for {self.team_role.name} by {sel_int.user}")
+                    await old_capt.remove_roles(
+                        cap_role,
+                        reason=f"Transferred captain to {new_member}",
+                    )
+                await new_member.add_roles(
+                    cap_role,
+                    reason=f"Promoted to captain for {self.team_role.name} by {sel_int.user}",
+                )
             except Exception:
-                await sel_int.response.send_message("Failed to transfer captain role (missing perms?).", ephemeral=True)
+                await sel_int.response.send_message(
+                    "Failed to transfer captain role (missing perms?).",
+                    ephemeral=True,
+                )
                 return
 
             await sel_int.response.send_message("Captain transferred.", ephemeral=True)
             old_disp = old_capt.mention if old_capt else "None"
-            await self._tx(guild, f"# {self.team_role.name} HAS CHANGED THERE CAPTAIN\n***• Old Captain: {old_disp} New Captain: {new_member.mention} ***")
+            await self._tx(
+                guild,
+                f"# {self.team_role.name} HAS CHANGED THERE CAPTAIN\n"
+                f"***• Old Captain: {old_disp} New Captain: {new_member.mention} ***",
+            )
 
         sel.callback = sel_cb
         v = discord.ui.View(timeout=60)
         v.add_item(sel)
-        await interaction.response.send_message("Select new captain:", view=v, ephemeral=True)
+        await interaction.response.send_message(
+            "Select new captain:", view=v, ephemeral=True
+        )
 
     @discord.ui.button(label="Disband", style=discord.ButtonStyle.danger, custom_id="mt_disband_button")
     async def disband_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # ALWAYS enabled (subject to invoker/admin check)
         if self.invoker_id and not self.admin_override and interaction.user.id != self.invoker_id:
             await interaction.response.send_message("This panel is not for you.", ephemeral=True)
             return
@@ -2901,13 +2994,11 @@ class ManageTeamView(discord.ui.View):
                 await i.response.send_message("Guild not found.", ephemeral=True)
                 return
 
-            # delete team role
             try:
                 await self.team_role.delete(reason=f"Disbanded by {i.user}")
             except Exception:
                 pass
 
-            # remove team role and Team Player from members
             team_player_role = guild.get_role(TEAM_PLAYER_ROLE_ID)
             for m in list(guild.members):
                 if self.team_role in m.roles:
@@ -2942,18 +3033,18 @@ class ManageTeamView(discord.ui.View):
 
     @discord.ui.button(label="Edit Team Info", style=discord.ButtonStyle.secondary, custom_id="mt_edit_button")
     async def edit_info(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # ALWAYS enabled (subject to invoker/admin check)
         if self.invoker_id and not self.admin_override and interaction.user.id != self.invoker_id:
             await interaction.response.send_message("This panel is not for you.", ephemeral=True)
             return
 
-        options = []
-        options.append(
+        options = [
             discord.SelectOption(
                 label="Team Profile Picture",
                 description="Set a profile picture (URL).",
                 value="pfp",
             )
-        )
+        ]
         if self.admin_override:
             options.append(
                 discord.SelectOption(
@@ -3121,7 +3212,9 @@ class ManageTeamView(discord.ui.View):
         v = discord.ui.View(timeout=60)
         v.add_item(sel)
         await interaction.response.send_message(
-            "Choose edit action:", view=v, ephemeral=True
+            "Choose edit action:",
+            view=v,
+            ephemeral=True,
         )
 
 
