@@ -341,11 +341,16 @@ def save_groups_state(data: dict):
 
 def find_member_team_role(member: discord.Member) -> discord.Role | None:
     """
-    Return this member's real team role, based ONLY on teams.json.
-    - Only roles whose IDs appear in teams.json count.
-    - Separator / fake roles like '————————Team Roles————————' are ignored.
-    - If multiple matches, return the highest-position role.
+    Strictly detect this member's real team role.
+
+    Requirements for a role to be considered a 'team role':
+    - Its ID is listed in teams.json
+    - Its name is not a separator/fake (e.g. '————————Team Roles————————')
+    - At least one non-bot member in the guild has BOTH:
+        - this role
+        - and a captain / co-captain / executive / team_player role
     """
+
     guild = member.guild
 
     # Load teams.json
@@ -364,24 +369,47 @@ def find_member_team_role(member: discord.Member) -> discord.Role | None:
         except (TypeError, ValueError):
             continue
 
-    # Helper to detect separator/fake roles by name
+    # Helper to detect obvious separator/fake roles
     def _is_fake_team_role(r: discord.Role) -> bool:
         name = (r.name or "").strip().lower()
-        # obvious separators like '————————Team Roles————————'
+        # e.g. "————————Team Roles————————"
         if "team roles" in name:
             return True
-        # names that are basically only dashes/lines/underscores/spaces
+        # names that are basically just dashes/lines/underscores/spaces
         if name and all(ch in "-—_ " for ch in name):
             return True
         return False
 
-    # Collect candidate roles that:
-    # - are assigned to the member
-    # - have an ID listed in teams.json
-    # - are not separator/fake roles
+    # Helper: is this role actually used as a *team* role by at least one staff/player?
+    def _is_real_team_role(r: discord.Role) -> bool:
+        if r.id not in team_ids_from_file:
+            return False
+        if _is_fake_team_role(r):
+            return False
+
+        for g_member in guild.members:
+            if g_member.bot:
+                continue
+            if r not in g_member.roles:
+                continue
+            # must have one of the global team staff/player roles
+            if any(
+                has_role_id(g_member, rid)
+                for rid in (
+                    CAPTAIN_ROLE_ID,
+                    CO_CAPTAIN_ROLE_ID,
+                    TEAM_EXEC_ROLE_ID,
+                    TEAM_PLAYER_ROLE_ID,
+                )
+            ):
+                return True
+
+        return False
+
+    # Collect member's roles that qualify as "real team roles"
     candidates: list[discord.Role] = []
     for r in member.roles:
-        if r.id in team_ids_from_file and not _is_fake_team_role(r):
+        if _is_real_team_role(r):
             candidates.append(r)
 
     if not candidates:
