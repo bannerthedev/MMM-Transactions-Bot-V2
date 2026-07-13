@@ -2672,9 +2672,15 @@ class ManageTeamView(discord.ui.View):
                 # enable action buttons once a member is selected
                 self._set_action_buttons_enabled(True)
 
+                # IMPORTANT: push updated view to the message so UI actually changes
+                try:
+                    await sel_inter.message.edit(view=self)
+                except Exception:
+                    pass
+
                 try:
                     await sel_inter.response.send_message(
-                        "Member selected. You can now use Kick / Promote / Assign Exec / Transfer Captain.",
+                        "You can now use Kick / Promote / Assign Exec / Transfer Captain.",
                         ephemeral=True,
                     )
                 except Exception:
@@ -2714,7 +2720,7 @@ class ManageTeamView(discord.ui.View):
         except Exception:
             pass
 
-    # --------------- BUTTONS ----------------
+    # ----------------- BUTTONS -----------------
 
     @discord.ui.button(label="Invite", style=discord.ButtonStyle.success, custom_id="mt_invite_button")
     async def invite_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -2941,7 +2947,6 @@ class ManageTeamView(discord.ui.View):
             return
 
         options = []
-        # Available to captains via /manage-team, and to admins via /admin-manage
         options.append(
             discord.SelectOption(
                 label="Team Profile Picture",
