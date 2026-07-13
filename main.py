@@ -339,6 +339,51 @@ def save_groups_state(data: dict):
         pass
 
 
+def find_member_team_role(member: discord.Member) -> discord.Role | None:
+    """
+    Try hard to find this member's team role:
+    1) If any of their roles is listed in teams.json, use that.
+    2) Otherwise, use is_team_role(...) on their roles.
+    If more than one candidate, pick the highest-position one.
+    """
+    guild = member.guild
+
+    # 1) From teams.json
+    try:
+        teams = load_teams()
+    except Exception:
+        teams = []
+
+    team_ids_from_file: set[int] = set()
+    for entry in teams:
+        rid = entry.get("role_id")
+        if not rid:
+            continue
+        try:
+            team_ids_from_file.add(int(rid))
+        except (TypeError, ValueError):
+            continue
+
+    candidates: list[discord.Role] = []
+
+    # roles that appear in teams.json
+    for r in member.roles:
+        if r.id in team_ids_from_file:
+            candidates.append(r)
+
+    # 2) Fallback: any role that looks like a team role
+    if not candidates:
+        for r in member.roles:
+            if is_team_role(guild, r):
+                candidates.append(r)
+
+    if not candidates:
+        return None
+
+    # pick the highest role in the role hierarchy
+    return max(candidates, key=lambda r: r.position)
+
+
 
 
 def add_team_to_list(role_id: int, name: str):
