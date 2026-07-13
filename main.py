@@ -2676,11 +2676,33 @@ class ManageTeamView(discord.ui.View):
                 target_id = int(sel_inter.data["values"][0])
                 SELECTED_MEMBER_CACHE[(sel_inter.user.id, self.team_role.id)] = target_id
 
-                # Enable the four action buttons
+                # find the selected member object, if possible
+                sel_member = None
+                if sel_inter.guild:
+                    sel_member = sel_inter.guild.get_member(target_id)
+
+                # enable the four action buttons
                 self._set_action_buttons_enabled(True)
 
-                # IMPORTANT: edit the original manage-team message for this interaction
+                # edit the original manage-team message with updated view
                 await sel_inter.response.edit_message(view=self)
+
+                # send a small ephemeral note with the selected member's name
+                if sel_member is not None:
+                    note = (
+                        f"Selected **{sel_member.display_name}**. "
+                        "You can now use Kick / Promote / Assign Exec / Transfer Captain for them."
+                    )
+                else:
+                    note = (
+                        "Member selected. "
+                        "You can now use Kick / Promote / Assign Exec / Transfer Captain."
+                    )
+
+                try:
+                    await sel_inter.followup.send(note, ephemeral=True)
+                except Exception:
+                    pass
 
             member_select.callback = member_cb
             self.add_item(member_select)
