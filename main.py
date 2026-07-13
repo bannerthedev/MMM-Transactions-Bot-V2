@@ -1985,7 +1985,7 @@ class LeaveCog(commands.Cog):
         self.bot = bot
 
     @app_commands.guilds(Object(id=TEST_GUILD_ID))
-    @app_commands.command(name="leave", description="Leave your team (players, co-captains, executives).")
+    @app_commands.command(name="leave", description="Leave your team (players, co-captains, executives, captains).")
     async def leave(self, interaction: discord.Interaction):
         guild = interaction.guild
         if guild is None:
@@ -2002,24 +2002,26 @@ class LeaveCog(commands.Cog):
             await interaction.response.send_message("Could not resolve your member object.", ephemeral=True)
             return
 
-        team_role = get_user_team_role(member)
+        # use robust helper
+        team_role = find_member_team_role(member)
         if team_role is None:
             await interaction.response.send_message("You are not on a team.", ephemeral=True)
             return
 
-        # check roles eligibility
         is_captain = has_role_id(member, CAPTAIN_ROLE_ID)
         is_co = has_role_id(member, CO_CAPTAIN_ROLE_ID)
         is_exec = has_role_id(member, TEAM_EXEC_ROLE_ID)
         is_player = has_role_id(member, TEAM_PLAYER_ROLE_ID)
 
         if not (is_player or is_co or is_exec or is_captain):
-            await interaction.response.send_message("Only players, co-captains, executives, or captains may use this command.", ephemeral=True)
+            await interaction.response.send_message(
+                "Only players, co-captains, executives, or captains may use this command.",
+                ephemeral=True,
+            )
             return
 
         # If captain, require transfer or disallow if no candidates
         if is_captain:
-            # build candidate list: co-captains or executives who share the team_role
             candidates = []
             for m in guild.members:
                 if m.bot:
@@ -2027,7 +2029,6 @@ class LeaveCog(commands.Cog):
                 if team_role not in m.roles:
                     continue
                 if has_role_id(m, CO_CAPTAIN_ROLE_ID) or has_role_id(m, TEAM_EXEC_ROLE_ID):
-                    # exclude the leaving captain
                     if m.id == member.id:
                         continue
                     candidates.append(m)
@@ -2036,14 +2037,26 @@ class LeaveCog(commands.Cog):
 
             if not candidates:
                 await interaction.response.send_message(
-                    "You are the captain and there are no co-captains/executives to transfer to. Please transfer captain to someone or disband the team before leaving.",
+                    "You are the captain and there are no co-captains/executives to transfer to. "
+                    "Please transfer captain to someone or disband the team before leaving.",
                     ephemeral=True,
                 )
                 return
 
-            # present select to choose new captain
-            options = [discord.SelectOption(label=c.display_name, description=f"{c.name}#{c.discriminator}", value=str(c.id)) for c in candidates]
-            select = discord.ui.Select(placeholder="Select a new captain", options=options, min_values=1, max_values=1)
+            options = [
+                discord.SelectOption(
+                    label=c.display_name,
+                    description=f"{c.name}#{c.discriminator}",
+                    value=str(c.id),
+                )
+                for c in candidates
+            ]
+            select = discord.ui.Select(
+                placeholder="Select a new captain",
+                options=options,
+                min_values=1,
+                max_values=1,
+            )
 
             async def sel_cb(sel_int: discord.Interaction):
                 new_id = int(sel_int.data["values"][0])
@@ -2057,18 +2070,18 @@ class LeaveCog(commands.Cog):
                     await sel_int.response.send_message("Captain role not configured on this server.", ephemeral=True)
                     return
 
-                # perform transfer
                 try:
-                    # remove captain role from leaving member
                     if cap_role in member.roles:
                         await member.remove_roles(cap_role, reason=f"Transferred captain via /leave by {member}")
-                    # add captain role to new member
                     await new_member.add_roles(cap_role, reason=f"Promoted to captain by {member} via /leave")
                 except Exception:
-                    await sel_int.response.send_message("Failed to transfer captain role (missing Manage Roles?).", ephemeral=True)
+                    await sel_int.response.send_message(
+                        "Failed to transfer captain role (missing Manage Roles?).",
+                        ephemeral=True,
+                    )
                     return
 
-                # now remove leaver's team + relevant global roles
+                # remove leaver's team + relevant global roles
                 roles_to_remove = []
                 if team_role in member.roles:
                     roles_to_remove.append(team_role)
@@ -2079,12 +2092,17 @@ class LeaveCog(commands.Cog):
 
                 try:
                     if roles_to_remove:
-                        await member.remove_roles(*roles_to_remove, reason=f"Left team via /leave by {member}")
+                        await member.remove_roles(
+                            *roles_to_remove,
+                            reason=f"Left team via /leave by {member}",
+                        )
                 except Exception:
-                    await sel_int.response.send_message("Transferred captain but failed to remove some roles from you (missing perms?).", ephemeral=True)
+                    await sel_int.response.send_message(
+                        "Transferred captain but failed to remove some roles from you (missing perms?).",
+                        ephemeral=True,
+                    )
                     return
 
-                # notify transactions
                 try:
                     tx = guild.get_channel(TRANSACTIONS_CHANNEL_ID)
                     if isinstance(tx, discord.TextChannel):
@@ -2092,15 +2110,22 @@ class LeaveCog(commands.Cog):
                 except Exception:
                     pass
 
-                await sel_int.response.send_message(f"Captain transferred to {new_member.mention} and you have left {team_role.name}.", ephemeral=True)
+                await sel_int.response.send_message(
+                    f"Captain transferred to {new_member.mention} and you have left {team_role.name}.",
+                    ephemeral=True,
+                )
 
             select.callback = sel_cb
             view = discord.ui.View(timeout=60)
             view.add_item(select)
-            await interaction.response.send_message("You are the captain. Select a new captain to transfer to before leaving:", view=view, ephemeral=True)
+            await interaction.response.send_message(
+                "You are the captain. Select a new captain to transfer to before leaving:",
+                view=view,
+                ephemeral=True,
+            )
             return
 
-        # Not a captain — proceed to remove roles
+        # Not a captain — just remove roles
         roles_to_remove = []
         if team_role in member.roles:
             roles_to_remove.append(team_role)
@@ -2111,12 +2136,17 @@ class LeaveCog(commands.Cog):
 
         try:
             if roles_to_remove:
-                await member.remove_roles(*roles_to_remove, reason=f"Left team via /leave by {member}")
+                await member.remove_roles(
+                    *roles_to_remove,
+                    reason=f"Left team via /leave by {member}",
+                )
         except Exception:
-            await interaction.response.send_message("Failed to remove roles (missing Manage Roles permission?). Contact staff.", ephemeral=True)
+            await interaction.response.send_message(
+                "Failed to remove roles (missing Manage Roles permission?). Contact staff.",
+                ephemeral=True,
+            )
             return
 
-        # notify transactions channel
         try:
             tx = guild.get_channel(TRANSACTIONS_CHANNEL_ID)
             if isinstance(tx, discord.TextChannel):
@@ -2124,7 +2154,10 @@ class LeaveCog(commands.Cog):
         except Exception:
             pass
 
-        await interaction.response.send_message(f"You have left {team_role.name}.", ephemeral=True)
+        await interaction.response.send_message(
+            f"You have left {team_role.name}.",
+            ephemeral=True,
+        )
 
 
 
