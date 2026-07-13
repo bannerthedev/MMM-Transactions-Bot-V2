@@ -2650,7 +2650,6 @@ class ManageTeamView(discord.ui.View):
         self.players = players
         self._roster_locked = roster_locked
 
-        # Member select
         if players:
             member_select = discord.ui.Select(
                 placeholder="Select member",
@@ -2677,28 +2676,16 @@ class ManageTeamView(discord.ui.View):
                 target_id = int(sel_inter.data["values"][0])
                 SELECTED_MEMBER_CACHE[(sel_inter.user.id, self.team_role.id)] = target_id
 
-                # Enable only the action buttons
+                # Enable the four action buttons
                 self._set_action_buttons_enabled(True)
 
-                # Update the original message so buttons actually change visually
-                try:
-                    await sel_inter.message.edit(view=self)
-                except Exception:
-                    pass
-
-                try:
-                    await sel_inter.response.send_message(
-                        "You can now use Kick / Promote / Assign Exec / Transfer Captain.",
-                        ephemeral=True,
-                    )
-                except Exception:
-                    pass
+                # IMPORTANT: edit the original manage-team message for this interaction
+                await sel_inter.response.edit_message(view=self)
 
             member_select.callback = member_cb
             self.add_item(member_select)
 
-        # Start with action buttons disabled.
-        # This only affects the 4 action buttons (not Invite / Disband / Edit).
+        # start with the four action buttons disabled
         self._set_action_buttons_enabled(False)
 
     def _set_action_buttons_enabled(self, enabled: bool):
