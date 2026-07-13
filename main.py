@@ -2639,20 +2639,43 @@ class ManageTeamView(discord.ui.View):
                     return
                 target_id = int(sel_inter.data["values"][0])
                 SELECTED_MEMBER_CACHE[(sel_inter.user.id, self.team_role.id)] = target_id
-                await sel_inter.response.send_message("Member selected. You can now use Kick / Promote / Assign Exec / Transfer Captain.", ephemeral=True)
+
+                # enable action buttons once a member is selected
+                self._set_action_buttons_enabled(True)
+
+                try:
+                    await sel_inter.response.send_message(
+                        "Member selected. You can now use Kick / Promote / Assign Exec / Transfer Captain.",
+                        ephemeral=True,
+                    )
+                except Exception:
+                    pass
 
             member_select.callback = member_cb
             self.add_item(member_select)
 
-
-        # If roster is locked, disable buttons for normal users.
-        # Admin override (from /admin-manage) still keeps full control.
+        # If roster is locked, disable buttons for normal users (but not admins).
         if roster_locked and not self.admin_override:
             for child in list(self.children):
                 if isinstance(child, discord.ui.Button):
                     if child.label == "Edit Team Info":
                         continue
                     child.disabled = True
+        else:
+            # roster not locked: start with action buttons disabled until selection
+            self._set_action_buttons_enabled(False)
+
+    def _set_action_buttons_enabled(self, enabled: bool):
+        """Enable/disable Kick / Promote / Assign exec / Transfer buttons."""
+        target_labels = {
+            "Kick member",
+            "Promote to co-captain",
+            "Assign executive",
+            "Transfer captain",
+        }
+        for child in self.children:
+            if isinstance(child, discord.ui.Button) and child.label in target_labels:
+                child.disabled = not enabled
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if self.invoker_id and not self.admin_override:
@@ -2681,7 +2704,6 @@ class ManageTeamView(discord.ui.View):
             await interaction.response.send_message("Use this in a server.", ephemeral=True)
             return
 
-        # Use a UserSelect dropdown (like your /invite example)
         view = discord.ui.View(timeout=60)
         view.add_item(InviteUserSelect(parent_view=self, invoker_id=interaction.user.id))
 
@@ -2784,7 +2806,6 @@ class ManageTeamView(discord.ui.View):
             await interaction.response.send_message("Use in server.", ephemeral=True)
             return
 
-        # Build candidates: co-captains and executives on this team
         candidates = []
         for m in guild.members:
             if m.bot:
@@ -2809,7 +2830,6 @@ class ManageTeamView(discord.ui.View):
                 await sel_int.response.send_message("Member not found.", ephemeral=True)
                 return
 
-            # find current captain (first one)
             old_capt = None
             for m in guild.members:
                 if self.team_role in m.roles and has_role_id(m, CAPTAIN_ROLE_ID):
