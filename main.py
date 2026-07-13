@@ -4480,8 +4480,8 @@ class ManageTeam(commands.Cog):
 
         member = interaction.user
 
-        # uses the improved get_user_team_role (with fallback scanning)
-        team_role = get_user_team_role(member)
+        # Use the new, more robust helper
+        team_role = find_member_team_role(member)
         if team_role is None:
             await interaction.response.send_message("You are not on a team.", ephemeral=True)
             return
@@ -4496,7 +4496,6 @@ class ManageTeam(commands.Cog):
             color=embed_color,
         )
 
-        # executive (single string) + lists
         embed.add_field(
             name="Team Executive",
             value=format_list_arrow([data["executive"]]),
@@ -4526,7 +4525,6 @@ class ManageTeam(commands.Cog):
             inline=False,
         )
 
-        # pending invites (mentions or strings prepared by get_team_data)
         pending = data.get("pending_invites", [])
         pending_text = ", ".join(str(x) for x in pending) if pending else "None"
         embed.add_field(
