@@ -5347,72 +5347,72 @@ class GroupStageCog(commands.Cog):
 
     # ---------- helpers ----------
 
-def _init_groups_state(self) -> dict:
-    """
-    Initialize fixed groups and zeroed standings.
-    DIFF is kept at 0 and never changed.
-    """
-    groups = {
-        "A": {
-            "teams": [
-                "Brothers Til Death",
-                "Generation Of Miracles",
-                "Gelato",
-                "Cute",
-            ]
-        },
-        "B": {
-            "teams": [
-                "Lyft",
-                "Absolute",
-                "MEOW",
-                "Cutie",
-            ]
-        },
-        "C": {
-            "teams": [
-                "Luxury",
-                "Freaks",
-                "Young Crew",
-                "Venom",
-            ]
-        },
-        "D": {
-            "teams": [
-                "Fusion",
-                "Deadly Sins",
-                "Supra",
-                "Obsession",
-            ]
-        },
-        "E": {
-            "teams": [
-                "Found 1",
-                "Suppression",
-                "The Munchers",
-                "The Branching Champs",
-            ]
-        },
-        "F": {
-            "teams": [
-                "Supernova",
-                "Symbiote",
-                "After 1",
-                "Faithful Monkeys",
-            ]
-        },
-    }
+    def _init_groups_state(self) -> dict:
+        """
+        Initialize fixed groups and zeroed standings.
+        DIFF is kept at 0 and never changed.
+        """
+        groups = {
+            "A": {
+                "teams": [
+                    "Brothers Til Death",
+                    "Generation Of Miracles",
+                    "Gelato",
+                    "Cute",
+                ]
+            },
+            "B": {
+                "teams": [
+                    "Lyft",
+                    "Absolute",
+                    "MEOW",
+                    "Cutie",
+                ]
+            },
+            "C": {
+                "teams": [
+                    "Luxury",
+                    "Freaks",
+                    "Young Crew",
+                    "Venom",
+                ]
+            },
+            "D": {
+                "teams": [
+                    "Fusion",
+                    "Deadly Sins",
+                    "Supra",
+                    "Obsession",
+                ]
+            },
+            "E": {
+                "teams": [
+                    "Found 1",
+                    "Suppression",
+                    "The Munchers",
+                    "The Branching Champs",
+                ]
+            },
+            "F": {
+                "teams": [
+                    "Supernova",
+                    "Symbiote",
+                    "After 1",
+                    "Faithful Monkeys",
+                ]
+            },
+        }
 
-    standings: dict[str, dict[str, int]] = {}
-    for letter, data in groups.items():
-        for t in data.get("teams", []):
-            standings[t] = {"group": letter, "W": 0, "L": 0, "DIFF": 0}
+        standings: dict[str, dict[str, int]] = {}
+        for letter, data in groups.items():
+            for t in data.get("teams", []):
+                standings[t] = {"group": letter, "W": 0, "L": 0, "DIFF": 0}
 
-    return {
-        "groups": groups,
-        "standings": standings,
-        "message": {"channel_id": None, "message_id": None},
-    }
+        return {
+            "groups": groups,
+            "standings": standings,
+            "message": {"channel_id": None, "message_id": None},
+        }
 
     def _build_groups_text(self, state: dict) -> str:
         groups = state.get("groups", {})
