@@ -971,6 +971,81 @@ class MainSettingsView(discord.ui.View):
 
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
+
+
+class DisbandTeamModal(discord.ui.Modal, title="Disband Team"):
+    team = discord.ui.TextInput(
+        label="Team (mention/name/id)",
+        required=True,
+        max_length=100,
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        guild = interaction.guild
+        if guild is None:
+            await interaction.response.send_message("Use this in a server.", ephemeral=True)
+            return
+
+        # resolve team role (mention, id, or name) using your existing helper
+        raw = self.team.value.strip()
+        team_role, _, _ = resolve_team_any(guild, raw)
+        if not isinstance(team_role, discord.Role):
+            await interaction.response.send_message("Could not find that team role.", ephemeral=True)
+            return
+
+        # safety: don't ever disband protected roles
+        protected = {
+            CAPTAIN_ROLE_ID, CO_CAPTAIN_ROLE_ID, TEAM_PLAYER_ROLE_ID, TEAM_EXEC_ROLE_ID,
+            HEAD_REF_ROLE_ID, REF_ROLE_ID, HEAD_CASTER_ROLE_ID, CASTER_ROLE_ID,
+            STREAM_WATCHER_ROLE_ID, UNBORN_CAPTAIN_ROLE_ID, EVENT_PING_ROLE_ID,
+        }
+        if team_role.id in protected or team_role.is_default() or team_role.managed:
+            await interaction.response.send_message("That role cannot be disbanded.", ephemeral=True)
+            return
+
+        tx_ch = guild.get_channel(TRANSACTIONS_CHANNEL_ID)
+
+        # Remove team role + global team roles from members
+        removed_members = 0
+        cap_role = guild.get_role(CAPTAIN_ROLE_ID)
+        co_role = guild.get_role(CO_CAPTAIN_ROLE_ID)
+        exec_role = guild.get_role(TEAM_EXEC_ROLE_ID)
+        player_role = guild.get_role(TEAM_PLAYER_ROLE_ID)
+
+        for m in list(guild.members):
+            if m.bot:
+                continue
+            if team_role in m.roles:
+                roles_to_remove = [team_role]
+                for r in (cap_role, co_role, exec_role, player_role):
+                    if r and r in m.roles:
+                        roles_to_remove.append(r)
+                try:
+                    await m.remove_roles(*roles_to_remove, reason=f"Manual disband via /admin-panel by {interaction.user}")
+                    removed_members += 1
+                except Exception:
+                    pass
+
+        # delete the team role
+        try:
+            await team_role.delete(reason=f"Manual disband via /admin-panel by {interaction.user}")
+        except Exception:
+            pass
+
+        # log to transactions
+        if isinstance(tx_ch, discord.TextChannel):
+            try:
+                await tx_ch.send(f"# {team_role.name} HAS BEEN DISBANDED\n\n")
+            except Exception:
+                pass
+
+        await interaction.response.send_message(
+            f"Disbanded **{team_role.name}** and removed team/global roles from {removed_members} member(s).",
+            ephemeral=True,
+        )
+
+
+
 # ---------------- Admin Panel Modals ----------------
 class CreateTeamModal(discord.ui.Modal, title="Create Team"):
     team_name = discord.ui.TextInput(label="Team Name", required=True)
@@ -1121,6 +1196,16 @@ class AdminPanelView(discord.ui.View):
             except Exception:
                 pass
         await interaction.response.send_message("Rosters locked for all teams.", ephemeral=True)
+
+    @discord.ui.button(label="Disband team", style=discord.ButtonStyle.danger)
+    async def disband_team_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # admins only
+        if not interaction.user.guild_permissions.administrator:
+            await interaction.response.send_message("You do not have permission to use this.", ephemeral=True)
+            return
+
+        await interaction.response.send_modal(DisbandTeamModal())
+
 
     @discord.ui.button(label="disband all", style=discord.ButtonStyle.danger)
     async def disband_all(self, interaction, button):
@@ -5262,30 +5347,72 @@ class GroupStageCog(commands.Cog):
 
     # ---------- helpers ----------
 
-    def _init_groups_state(self) -> dict:
-        """
-        Initialize fixed groups and zeroed standings.
-        DIFF is kept at 0 and never changed (to match your examples).
-        """
-        groups = {
-            "A": {"teams": ["Brothers Til Death", "Lynx", "Gelato", "Cute"]},
-            "B": {"teams": ["Lyft", "Absolute", "MEOW", "Cutie"]},
-            "C": {"teams": ["Luxury", "Freaks", "Young Crew", "Venom"]},
-            "D": {"teams": ["Fusion", "Sexy Reapers", "Born 2 Kill", "Obsession"]},
-            "E": {"teams": ["Monke Militia", "Suppression", "The Munchers", "The Branching Champs"]},
-            "F": {"teams": ["Supernova", "Symbiote", "After 1", "Faithful Monkeys"]},
-        }
+def _init_groups_state(self) -> dict:
+    """
+    Initialize fixed groups and zeroed standings.
+    DIFF is kept at 0 and never changed.
+    """
+    groups = {
+        "A": {
+            "teams": [
+                "Brothers Til Death",
+                "Generation Of Miracles",
+                "Gelato",
+                "Cute",
+            ]
+        },
+        "B": {
+            "teams": [
+                "Lyft",
+                "Absolute",
+                "MEOW",
+                "Cutie",
+            ]
+        },
+        "C": {
+            "teams": [
+                "Luxury",
+                "Freaks",
+                "Young Crew",
+                "Venom",
+            ]
+        },
+        "D": {
+            "teams": [
+                "Fusion",
+                "Deadly Sins",
+                "Supra",
+                "Obsession",
+            ]
+        },
+        "E": {
+            "teams": [
+                "Found 1",
+                "Suppression",
+                "The Munchers",
+                "The Branching Champs",
+            ]
+        },
+        "F": {
+            "teams": [
+                "Supernova",
+                "Symbiote",
+                "After 1",
+                "Faithful Monkeys",
+            ]
+        },
+    }
 
-        standings: dict[str, dict[str, int]] = {}
-        for letter, data in groups.items():
-            for t in data.get("teams", []):
-                standings[t] = {"group": letter, "W": 0, "L": 0, "DIFF": 0}
+    standings: dict[str, dict[str, int]] = {}
+    for letter, data in groups.items():
+        for t in data.get("teams", []):
+            standings[t] = {"group": letter, "W": 0, "L": 0, "DIFF": 0}
 
-        return {
-            "groups": groups,
-            "standings": standings,
-            "message": {"channel_id": None, "message_id": None},
-        }
+    return {
+        "groups": groups,
+        "standings": standings,
+        "message": {"channel_id": None, "message_id": None},
+    }
 
     def _build_groups_text(self, state: dict) -> str:
         groups = state.get("groups", {})
@@ -5829,7 +5956,7 @@ class BracketAdmin(commands.Cog):
         await interaction.followup.send("\n".join(summary), ephemeral=True)
 
 # ------------------------------ Auto-disband losing teams in single elimination -----------------------
-SINGLE_ELIM = True  # set True for this season
+SINGLE_ELIM = False  # set True for this season
 
 class AutoDisbandScrim(commands.Cog):
     def __init__(self, bot: commands.Bot):
