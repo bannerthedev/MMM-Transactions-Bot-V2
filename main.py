@@ -74,6 +74,11 @@ COMMUNITY_MANAGER_ROLE_ID = 1472041769049784330   # @Community Manager
 SUPERVISOR_ROLE_ID        = 1472041769049784330   # @Supervisor
 DEVELOPMENT_TEAM_ROLE_ID  = 1410216723323293768  # <-- replace 0 with your Dev Team role ID
 
+MAX_EXECUTIVES = 1
+MAX_CAPTAINS = 1
+MAX_CO_CAPTAINS = 2
+
+
 # FAQ / misc roles
 STREAM_WATCHER_ROLE_ID = 1462939942391910420
 UNBORN_CAPTAIN_ROLE_ID = 1348493310221881375
@@ -2961,7 +2966,6 @@ class ManageTeamView(discord.ui.View):
 
     @discord.ui.button(label="Promote to co-captain", style=discord.ButtonStyle.primary, custom_id="mt_promote_co_button")
     async def promote_co(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # starts disabled until member selected
         if self.invoker_id and not self.admin_override and interaction.user.id != self.invoker_id:
             await interaction.response.send_message("This panel is not for you.", ephemeral=True)
             return
@@ -2985,12 +2989,21 @@ class ManageTeamView(discord.ui.View):
             await interaction.response.send_message("Co-captain role not configured.", ephemeral=True)
             return
 
-        try:
-            await member.add_roles(co_role, reason=f"Promoted to co-captain by {interaction.user}")
+        # Count existing co-captains on this team
+        current_cos = [
+            m for m in guild.members
+            if not m.bot and self.team_role in m.roles and has_role_id(m, CO_CAPTAIN_ROLE_ID)
+        ]
+        if len(current_cos) >= MAX_CO_CAPTAINS and not self.admin_override:
             await interaction.response.send_message(
-                f"{member.mention} promoted to co-captain.",
+                f"This team already has {len(current_cos)} co-captains (max {MAX_CO_CAPTAINS}).",
                 ephemeral=True,
             )
+            return
+
+        try:
+            await member.add_roles(co_role, reason=f"Promoted to co-captain by {interaction.user}")
+            await interaction.response.send_message(f"{member.mention} promoted to co-captain.", ephemeral=True)
             await self._tx(guild, f"{member.mention} Has Been Promoted to Co-captain")
         except Exception:
             await interaction.response.send_message(
@@ -3000,7 +3013,6 @@ class ManageTeamView(discord.ui.View):
 
     @discord.ui.button(label="Assign executive", style=discord.ButtonStyle.primary, custom_id="mt_assign_exec_button")
     async def assign_exec(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # starts disabled until member selected
         if self.invoker_id and not self.admin_override and interaction.user.id != self.invoker_id:
             await interaction.response.send_message("This panel is not for you.", ephemeral=True)
             return
@@ -3021,22 +3033,28 @@ class ManageTeamView(discord.ui.View):
 
         exec_role = guild.get_role(TEAM_EXEC_ROLE_ID)
         if exec_role is None:
+            await interaction.response.send_message("Team executive role not configured.", ephemeral=True)
+            return
+
+        # Count existing executives on this team
+        current_execs = [
+            m for m in guild.members
+            if not m.bot and self.team_role in m.roles and has_role_id(m, TEAM_EXEC_ROLE_ID)
+        ]
+        if len(current_execs) >= MAX_EXECUTIVES and not self.admin_override:
             await interaction.response.send_message(
-                "Team executive role not configured.",
+                f"This team already has {len(current_execs)} executives (max {MAX_EXECUTIVES}).",
                 ephemeral=True,
             )
             return
 
         try:
             await member.add_roles(exec_role, reason=f"Assigned executive by {interaction.user}")
-            await interaction.response.send_message(
-                f"{member.mention} assigned as team executive.",
-                ephemeral=True,
-            )
+            await interaction.response.send_message(f"{member.mention} assigned as team executive.", ephemeral=True)
             await self._tx(guild, f"{member.mention} Has Been Promoted to Team executive")
         except Exception:
             await interaction.response.send_message(
-                "Failed to add executive role (missing perms.).",
+                "Failed to add executive role (missing perms?).",
                 ephemeral=True,
             )
 
@@ -3882,14 +3900,13 @@ class TimeAcceptView(discord.ui.View):
 
         # build discord timestamp
         unix_ts = parse_time_to_unix_est(self.time)
-        ts_str = f" (<t:{unix_ts}:F>)" if unix_ts is not None else ""
+        ts_str = f"<t:{unix_ts}:F>" if unix_ts is not None else self.time
 
-        # MATCH_TIMES message
         if special:
             mt_content = (
                 f"{header}\n"
                 f"> Teams: {self.team1_name} vs {self.team2_name}\n"
-                f"> Time: {self.time}{ts_str}\n"
+                f"> Time: {ts_str}\n"
                 f"> Referee: \n"
                 f"> Caster: "
             )
@@ -3897,10 +3914,11 @@ class TimeAcceptView(discord.ui.View):
             mt_content = (
                 f"{self.team1_name} vs {self.team2_name}\n"
                 f"> WEEK: {self.week}\n"
-                f"> Time: {self.time}{ts_str}\n"
+                f"> Time: {ts_str}\n"
                 f"> Referee: \n"
                 f"> Caster: "
             )
+
 
         if isinstance(match_times, discord.TextChannel):
             try:
@@ -4113,7 +4131,7 @@ class ForceTimeView(discord.ui.View):
         time_str = self.time_str
 
         unix_ts = parse_time_to_unix_est(time_str)
-        ts_str = f" (<t:{unix_ts}:F>)" if unix_ts is not None else ""
+        ts_str = f"<t:{unix_ts}:F>" if unix_ts is not None else time_str
 
 
         # MATCH_TIMES entry (like a finalized time)
@@ -4122,7 +4140,7 @@ class ForceTimeView(discord.ui.View):
             mt_content = (
                 f"{self.team1_name} vs {self.team2_name}\n"
                 f"> WEEK: {week}\n"
-                f"> Time: {time_str}{ts_str}\n"
+                f"> Time: {ts_str}\n"
                 f"> Referee: \n"
                 f"> Caster: "
             )
@@ -5348,71 +5366,44 @@ class GroupStageCog(commands.Cog):
     # ---------- helpers ----------
 
     def _init_groups_state(self) -> dict:
-        """
-        Initialize fixed groups and zeroed standings.
-        DIFF is kept at 0 and never changed.
-        """
         groups = {
-            "A": {
-                "teams": [
-                    "Brothers Til Death",
-                    "Generation Of Miracles",
-                    "Gelato",
-                    "Cute",
-                ]
-            },
-            "B": {
-                "teams": [
-                    "Lyft",
-                    "Absolute",
-                    "MEOW",
-                    "Cutie",
-                ]
-            },
-            "C": {
-                "teams": [
-                    "Luxury",
-                    "Freaks",
-                    "Young Crew",
-                    "Venom",
-                ]
-            },
-            "D": {
-                "teams": [
-                    "Fusion",
-                    "Deadly Sins",
-                    "Supra",
-                    "Obsession",
-                ]
-            },
-            "E": {
-                "teams": [
-                    "Found 1",
-                    "Suppression",
-                    "The Munchers",
-                    "The Branching Champs",
-                ]
-            },
-            "F": {
-                "teams": [
-                    "Supernova",
-                    "Symbiote",
-                    "After 1",
-                    "Faithful Monkeys",
-                ]
-            },
+            "A": {"teams": ["Brothers Til Death", "Generation Of Miracles", "Gelato", "Cute"]},
+            "B": {"teams": ["Lyft", "Absolute", "MEOW", "Cutie"]},
+            "C": {"teams": ["Luxury", "Freaks", "Young Crew", "Venom"]},
+            "D": {"teams": ["Fusion", "Deadly Sins", "Supra", "Obsession"]},
+            "E": {"teams": ["Found 1", "Suppression", "The Munchers", "The Branching Champs"]},
+            "F": {"teams": ["Supernova", "Symbiote", "After 1", "Faithful Monkeys"]},
         }
 
         standings: dict[str, dict[str, int]] = {}
+
+        # default zeros
         for letter, data in groups.items():
             for t in data.get("teams", []):
                 standings[t] = {"group": letter, "W": 0, "L": 0, "DIFF": 0}
+
+        # apply your starting W/L
+        # C
+        standings["Luxury"]["L"] = 1
+        standings["Freaks"]["W"] = 1
+        # D
+        standings["Fusion"]["W"] = 1
+        standings["Deadly Sins"]["L"] = 1
+        # E
+        standings["Found 1"]["L"] = 1
+        standings["Suppression"]["W"] = 1
+        standings["The Munchers"]["W"] = 1
+        standings["The Branching Champs"]["L"] = 1
+        # F
+        standings["Supernova"]["W"] = 1
+        standings["Symbiote"]["L"] = 1
 
         return {
             "groups": groups,
             "standings": standings,
             "message": {"channel_id": None, "message_id": None},
         }
+
 
     def _build_groups_text(self, state: dict) -> str:
         groups = state.get("groups", {})
@@ -5483,15 +5474,17 @@ class GroupStageCog(commands.Cog):
         Update W/L only. DIFF is intentionally left unchanged (stays 0).
         """
         standings = state.setdefault("standings", {})
+        # build a case-insensitive map
+        name_map = {name.lower(): name for name in standings.keys()}
 
-        if winner not in standings or loser not in standings:
-            return  # result not for a group-stage team
+        w_key = name_map.get(winner.lower())
+        l_key = name_map.get(loser.lower())
+        if not w_key or not l_key:
+            return  # not a group-stage match (name mismatch)
 
-        sw = standings[winner]
-        sl = standings[loser]
+        sw = standings[w_key]
+        sl = standings[l_key]
 
-        sw["W"] = sw.get("W", 0) + 1
-        sl["L"] = sl.get("L", 0) + 1
         # DIFF intentionally unchanged
 
     async def _update_standings_message(self, guild: discord.Guild):
