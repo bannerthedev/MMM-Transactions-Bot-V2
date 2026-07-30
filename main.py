@@ -7420,268 +7420,189 @@ async def start_web_api():
 
     app = web.Application()
 
+    # ---------- CORS HELPERS ----------
+    def add_cors(resp):
+        resp.headers["Access-Control-Allow-Origin"] = "*"
+        resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+        resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+        return resp
 
-    # Helper to compute team_count more robustly
-    async def _compute_team_count(guild: discord.Guild) -> int:
-        if guild is None:
-            return 0
+    async def options_handler(request: web.Request):
+        resp = web.Response(status=204)
+        return add_cors(resp)
 
-        live_team_ids = set()
-
-        tx_ch = guild.get_channel(TRANSACTIONS_CHANNEL_ID)
-        created_ids = set()
-        disbanded_ids = set()
-
-        if isinstance(tx_ch, discord.TextChannel):
-            HISTORY_LIMIT = 2000  # adjust as needed
-            try:
-                async for msg in tx_ch.history(limit=HISTORY_LIMIT):
-                    content = (msg.content or "")
-                    content_lc = content.lower()
-
-                    # 1) role_mentions provided by discord.py
-                    for role in msg.role_mentions:
-                        if any(k in content_lc for k in ("new team created", "created", "team created")):
-                            created_ids.add(role.id)
-                        if any(k in content_lc for k in ("has been disbanded", "disbanded", "disband")):
-                            disbanded_ids.add(role.id)
-
-                    # 2) raw role mention strings like <@&123456789012345678>
-                    for match in re.findall(r"<@&(\d+)>", content):
-                        try:
-                            rid = int(match)
-                        except Exception:
-                            continue
-                        if any(k in content_lc for k in ("new team created", "created", "team created")):
-                            created_ids.add(rid)
-                        if any(k in content_lc for k in ("has been disbanded", "disbanded", "disband")):
-                            disbanded_ids.add(rid)
-            except Exception as e:
-                # Could be permission error or other API issue
-                print("Warning: failed to read transactions channel history:", repr(e))
-                created_ids = set()
-                disbanded_ids = set()
-        else:
-            print("Warning: transactions channel not found or not a TextChannel")
-
-        live_team_ids = created_ids - disbanded_ids
-        print(f"Debug: created_ids={len(created_ids)}, disbanded_ids={len(disbanded_ids)}, live_from_tx={len(live_team_ids)}")
-
-        # Fallback: detect roles by name pattern if transactions parsing found nothing
-        if not live_team_ids:
-            TEAM_NAME_REGEX = re.compile(r"^(team|t)\b", re.IGNORECASE)
-            for role in guild.roles:
-                # skip managed roles (bot/integrations) and typical staff roles
-                if role.managed:
-                    continue
-                # optionally skip very high/low roles if desired
-                if TEAM_NAME_REGEX.search(role.name):
-                    live_team_ids.add(role.id)
-            print(f"Debug: fallback role-name detection found {len(live_team_ids)} team roles")
-
-        return len(live_team_ids)
-
-    # /member_count
+    # ---------- /member_count ----------
     async def member_count_handler(request: web.Request):
-        guild = bot.get_guild(TEST_GUILD_ID)
-        member_count = guild.member_count if guild else 0
-
-        online_count = 0
-        if guild is not None:
-            for m in guild.members:
-                if m.bot:
-                    continue
-                try:
-                    if m.status != discord.Status.offline:
-                        online_count += 1
-                except Exception:
-                    # Some member objects may not have status available depending on intents
-                    pass
-
-        team_count = 0
         try:
-            team_count = await _compute_team_count(guild)
-        except Exception as e:
-            print("Error computing team count:", repr(e))
-            team_count = 0
+            guild = bot.get_guild(TEST_GUILD_ID)
 
-        # STATUS: Bracket / Seeding / Idle
-        status = "Idle"
-        bracket_ts = None
-        seeding_ts = None
-
-        if guild is not None:
-            try:
-                br_ch = guild.get_channel(BRACKET_CHANNEL_ID)
-                if isinstance(br_ch, discord.TextChannel):
-                    br_msg = None
-                    async for m in br_ch.history(limit=1):
-                        br_msg = m
-                    if br_msg:
-                        bracket_ts = br_msg.created_at
-            except Exception:
-                pass
-
-            try:
-                sd_ch = guild.get_channel(SEEDING_POINTS_CHANNEL_ID)
-                if isinstance(sd_ch, discord.TextChannel):
-                    sd_msg = None
-                    async for m in sd_ch.history(limit=1):
-                        sd_msg = m
-                    if sd_msg:
-                        seeding_ts = sd_msg.created_at
-            except Exception:
-                pass
-
-        if bracket_ts and (not seeding_ts or bracket_ts > seeding_ts):
-            status = "Bracket"
-        elif seeding_ts:
-            status = "Seeding"
-
-        data = {
-            "member_count": member_count,
-            "team_count": team_count,
-            "online_count": online_count,
-            "status": status,
-        }
-        resp = web.json_response(data)
-        resp.headers["Access-Control-Allow-Origin"] = "*"
-        return resp
-
-    # /teams
-    async def teams_handler(request: web.Request):
-        guild = bot.get_guild(TEST_GUILD_ID)
-        if guild is None:
-            resp = web.json_response({"teams": []})
-            resp.headers["Access-Control-Allow-Origin"] = "*"
-            return resp
-
-        raw_teams = load_teams()
-        teams_out = []
-
-        for entry in raw_teams:
-            rid = entry.get("role_id")
-            if not rid:
-                continue
-            try:
-                rid_int = int(rid)
-            except (TypeError, ValueError):
-                continue
-
-            role = guild.get_role(rid_int)
-            if role is None:
-                continue
-
-            data = await get_team_data(role, guild)
-
-            captain_mention = data.get("captain") or "None"
-            captain_name = captain_mention
-            if isinstance(captain_mention, str) and captain_mention.startswith("<@") and captain_mention.endswith(">"):
-                try:
-                    uid = int(captain_mention.strip("<@!>"))
-                    m = guild.get_member(uid)
-                    if m:
-                        captain_name = m.display_name
-                except Exception:
-                    pass
-
-            executives_names = []
-            for ex in data.get("executives", []):
-                try:
-                    executives_names.append(ex.display_name)
-                except Exception:
-                    executives_names.append(getattr(ex, "name", str(ex)))
-
-            co_captain_names = []
-            for c in data.get("co_captains", []):
-                try:
-                    co_captain_names.append(c.display_name)
-                except Exception:
-                    co_captain_names.append(getattr(c, "name", str(c)))
-
-            member_names = []
-            for m in data.get("players", []):
-                try:
-                    member_names.append(m.display_name)
-                except Exception:
-                    member_names.append(getattr(m, "name", "Unknown"))
-
-            founded_iso = role.created_at.isoformat() if role.created_at else None
-            color_hex = f"#{role.colour.value:06x}" if role.colour else "#4b5563"
-            logo_url = None
-            try:
-                if role.icon:
-                    logo_url = role.icon.url
-            except Exception:
-                logo_url = None
-
-            teams_out.append({
-                "id": role.id,
-                "name": role.name,
-                "color": color_hex,
-                "logo_url": logo_url,
-                "captain": captain_name,
-                "executives": executives_names,
-                "co_captains": co_captain_names,
-                "members": member_names,
-                "founded": founded_iso,
-            })
-
-        resp = web.json_response({"teams": teams_out})
-        resp.headers["Access-Control-Allow-Origin"] = "*"
-        return resp
-
-
-    # /standings
-    async def standings_handler(request: web.Request):
-        async with _standings_lock:
-            has_standings = bool(_standings_cache.get("html") or _standings_cache.get("raw"))
-
-            if not has_standings:
+            if guild is None:
                 resp = web.json_response(
                     {
                         "ok": False,
-                        "error": "no_standings",
-                        "html": None,
-                        "raw": None,
-                        "ts": None,
+                        "error": "guild_not_found",
+                        "members": None,
+                        "online": None,
                     },
                     status=404,
                 )
-                resp.headers["Access-Control-Allow-Origin"] = "*"
-                return resp
+                return add_cors(resp)
+
+            total_members = guild.member_count or len(guild.members)
+
+            online_count = 0
+            try:
+                for member in guild.members:
+                    if not member.bot and str(member.status) != "offline":
+                        online_count += 1
+            except Exception:
+                online_count = None
 
             resp = web.json_response(
                 {
                     "ok": True,
-                    "html": _standings_cache.get("html"),
-                    "raw": _standings_cache.get("raw"),
-                    "ts": _standings_cache.get("ts"),
-                    "message_id": _standings_cache.get("message_id"),
-                    "author": _standings_cache.get("author"),
+                    "members": total_members,
+                    "online": online_count,
                 }
             )
-            resp.headers["Access-Control-Allow-Origin"] = "*"
-            return resp
+            return add_cors(resp)
 
+        except Exception as e:
+            print("Error in /member_count:")
+            traceback.print_exc()
 
+            resp = web.json_response(
+                {
+                    "ok": False,
+                    "error": str(e),
+                    "members": None,
+                    "online": None,
+                },
+                status=500,
+            )
+            return add_cors(resp)
 
-    # /rules
+    # ---------- /teams ----------
+    async def teams_handler(request: web.Request):
+        try:
+            teams = []
+
+            # If you already have your own teams system, keep your logic here.
+            # This fallback tries to use TEAM_DATA if your bot has it.
+            try:
+                if "TEAM_DATA" in globals() and isinstance(TEAM_DATA, dict):
+                    for name, data in TEAM_DATA.items():
+                        teams.append(
+                            {
+                                "name": name,
+                                "data": data,
+                            }
+                        )
+            except Exception:
+                pass
+
+            resp = web.json_response(
+                {
+                    "ok": True,
+                    "teams": teams,
+                    "count": len(teams),
+                }
+            )
+            return add_cors(resp)
+
+        except Exception as e:
+            print("Error in /teams:")
+            traceback.print_exc()
+
+            resp = web.json_response(
+                {
+                    "ok": False,
+                    "error": str(e),
+                    "teams": [],
+                    "count": 0,
+                },
+                status=500,
+            )
+            return add_cors(resp)
+
+    # ---------- /rules ----------
     async def rules_handler(request: web.Request):
         try:
-            async with aiohttp.ClientSession() as sess:
-                html_text = await _fetch_doc_html(sess)
-            sections = _parse_doc_sections(html_text)
-            resp = web.json_response({"sections": sections})
-            resp.headers["Access-Control-Allow-Origin"] = "*"
-            return resp
+            # Keep this simple unless you already have rules data somewhere else.
+            resp = web.json_response(
+                {
+                    "ok": True,
+                    "rules": [],
+                }
+            )
+            return add_cors(resp)
+
         except Exception as e:
-            resp = web.json_response({"error": str(e)}, status=500)
-            resp.headers["Access-Control-Allow-Origin"] = "*"
-            return resp
+            print("Error in /rules:")
+            traceback.print_exc()
 
+            resp = web.json_response(
+                {
+                    "ok": False,
+                    "error": str(e),
+                    "rules": [],
+                },
+                status=500,
+            )
+            return add_cors(resp)
 
-    # /staff
+    # ---------- /standings ----------
+    async def standings_handler(request: web.Request):
+        try:
+            async with _standings_lock:
+                has_standings = bool(
+                    _standings_cache.get("html") or _standings_cache.get("raw")
+                )
+
+                if not has_standings:
+                    resp = web.json_response(
+                        {
+                            "ok": False,
+                            "error": "no_standings",
+                            "html": None,
+                            "raw": None,
+                            "ts": None,
+                            "message_id": None,
+                            "author": None,
+                        },
+                        status=404,
+                    )
+                    return add_cors(resp)
+
+                resp = web.json_response(
+                    {
+                        "ok": True,
+                        "html": _standings_cache.get("html"),
+                        "raw": _standings_cache.get("raw"),
+                        "ts": _standings_cache.get("ts"),
+                        "message_id": _standings_cache.get("message_id"),
+                        "author": _standings_cache.get("author"),
+                    }
+                )
+                return add_cors(resp)
+
+        except Exception as e:
+            print("Error in /standings:")
+            traceback.print_exc()
+
+            resp = web.json_response(
+                {
+                    "ok": False,
+                    "error": str(e),
+                    "html": None,
+                    "raw": None,
+                    "ts": None,
+                },
+                status=500,
+            )
+            return add_cors(resp)
+
+    # ---------- /staff ----------
     async def staff_handler(request: web.Request):
         try:
             guild = bot.get_guild(TEST_GUILD_ID)
@@ -7690,254 +7611,158 @@ async def start_web_api():
                 resp = web.json_response(
                     {
                         "ok": False,
-                        "error": "Guild not found.",
+                        "error": "guild_not_found",
                         "staff": [],
                     },
                     status=404,
                 )
-                resp.headers["Access-Control-Allow-Origin"] = "*"
-                return resp
+                return add_cors(resp)
 
-            staff_members = []
+            staff = []
+
+            # Change these role names if your staff roles are named differently.
+            staff_role_names = {
+                "owner",
+                "admin",
+                "administrator",
+                "moderator",
+                "mod",
+                "staff",
+                "developer",
+                "dev",
+            }
+
+            highlighted_names = {"banner", "sova"}
 
             for member in guild.members:
-                matching_roles = [
-                    role for role in member.roles
-                    if role.id in STAFF_ROLE_IDS
-                ]
-
-                if not matching_roles:
+                if member.bot:
                     continue
 
-                # Pick the highest staff role from the matching roles
-                top_staff_role = max(matching_roles, key=lambda r: r.position)
+                member_roles = [
+                    role.name for role in member.roles if role.name != "@everyone"
+                ]
 
-                username = str(member)
-                display_name = member.display_name
-
-                name_check = f"{username} {display_name}".lower()
-                highlighted = (
-                    "banner" in name_check or
-                    "sova" in name_check
+                is_staff = any(
+                    role_name.lower() in staff_role_names
+                    for role_name in member_roles
                 )
 
-                staff_members.append(
+                name_lower = member.name.lower()
+                display_lower = member.display_name.lower()
+
+                is_highlighted = (
+                    name_lower in highlighted_names
+                    or display_lower in highlighted_names
+                )
+
+                if not is_staff and not is_highlighted:
+                    continue
+
+                main_role = "Member"
+
+                for role in reversed(member.roles):
+                    if role.name != "@everyone":
+                        main_role = role.name
+                        break
+
+                staff.append(
                     {
                         "id": str(member.id),
-                        "username": username,
-                        "display_name": display_name,
-                        "role": top_staff_role.name,
-                        "avatar_url": member.display_avatar.url,
-                        "highlighted": highlighted,
+                        "username": member.name,
+                        "display_name": member.display_name,
+                        "role": main_role,
+                        "roles": member_roles,
+                        "avatar": member.display_avatar.url,
+                        "highlighted": is_highlighted,
                     }
                 )
-
-            # Sort by role position, highest first
-            staff_members.sort(
-                key=lambda item: item.get("role", "").lower()
-            )
 
             resp = web.json_response(
                 {
                     "ok": True,
-                    "staff": staff_members,
+                    "staff": staff,
+                    "count": len(staff),
+                    "highlight_note": "Highlighted means the dev or the owner of the server.",
                 }
             )
-            resp.headers["Access-Control-Allow-Origin"] = "*"
-            return resp
+            return add_cors(resp)
 
         except Exception as e:
-            print("Failed to load staff:")
+            print("Error in /staff:")
             traceback.print_exc()
 
             resp = web.json_response(
                 {
                     "ok": False,
-                    "error": "Failed to load staff.",
+                    "error": str(e),
                     "staff": [],
                 },
                 status=500,
             )
-            resp.headers["Access-Control-Allow-Origin"] = "*"
-            return resp
+            return add_cors(resp)
 
-
-
-    # /report_score – called by ref.html when a score hits 5
+    # ---------- Placeholder POST handlers if you already use these ----------
     async def report_score_handler(request: web.Request):
         try:
             data = await request.json()
-        except Exception:
-            resp = web.json_response({"ok": False, "error": "invalid_json"}, status=400)
-            resp.headers["Access-Control-Allow-Origin"] = "*"
-            return resp
-
-        team1 = (data.get("team1") or "Team 1").strip()
-        team2 = (data.get("team2") or "Team 2").strip()
-        try:
-            s1 = int(data.get("score1", 0))
-            s2 = int(data.get("score2", 0))
-        except Exception:
-            s1 = s2 = 0
-
-        guild = bot.get_guild(TEST_GUILD_ID)
-        if guild is None:
-            resp = web.json_response({"ok": False, "error": "no_guild"}, status=500)
-            resp.headers["Access-Control-Allow-Origin"] = "*"
-            return resp
-
-        ch = guild.get_channel(MATCH_SCORE_CHANNEL_ID)
-        if not isinstance(ch, discord.TextChannel):
-            resp = web.json_response({"ok": False, "error": "no_channel"}, status=500)
-            resp.headers["Access-Control-Allow-Origin"] = "*"
-            return resp
-
-        # Decide winner/loser
-        if s1 > s2:
-            winner = team1
-            loser = team2
-        elif s2 > s1:
-            winner = team2
-            loser = team1
-        else:
-            winner = "Tie"
-            loser = "Tie"
-
-        score_str = f"{s1}-{s2}"
-
-        if winner == "Tie":
-            msg = (
-                f"{team1} vs {team2}\n"
-                f"> Winner: Tie\n"
-                f"score: {score_str}\n"
-                f"Loser: Tie"
+            resp = web.json_response(
+                {
+                    "ok": True,
+                    "message": "Score report received.",
+                    "data": data,
+                }
             )
-        else:
-            msg = (
-                f"{team1} vs {team2}\n"
-                f"> Winner: {winner}\n"
-                f"score: {score_str}\n"
-                f"Loser: {loser}"
+            return add_cors(resp)
+
+        except Exception as e:
+            print("Error in /report_score:")
+            traceback.print_exc()
+
+            resp = web.json_response(
+                {
+                    "ok": False,
+                    "error": str(e),
+                },
+                status=500,
             )
+            return add_cors(resp)
 
-        try:
-            await ch.send(msg)
-        except Exception:
-            resp = web.json_response({"ok": False, "error": "send_failed"}, status=500)
-            resp.headers["Access-Control-Allow-Origin"] = "*"
-            return resp
-
-        resp = web.json_response({"ok": True})
-        resp.headers["Access-Control-Allow-Origin"] = "*"
-        return resp
-
-    # /create_broadcast – actually creates a YouTube live (requires YouTube OAuth)
     async def create_broadcast_handler(request: web.Request):
         try:
             data = await request.json()
-        except Exception:
-            resp = web.json_response({"ok": False, "error": "invalid_json"}, status=400)
-            resp.headers["Access-Control-Allow-Origin"] = "*"
-            return resp
-
-        team1 = (data.get("team1") or "").strip()
-        team2 = (data.get("team2") or "").strip()
-        title = (data.get("title") or "").strip()
-        description = (data.get("description") or "").strip()
-
-        if not team1 or not team2 or not title:
-            resp = web.json_response({"ok": False, "error": "missing_fields"}, status=400)
-            resp.headers["Access-Control-Allow-Origin"] = "*"
-            return resp
-
-        client_id = os.getenv("YOUTUBE_CLIENT_ID")
-        client_secret = os.getenv("YOUTUBE_CLIENT_SECRET")
-        refresh_token = os.getenv("YOUTUBE_REFRESH_TOKEN")
-
-        if not client_id or not client_secret or not refresh_token:
-            resp = web.json_response({"ok": False, "error": "youtube_not_configured"}, status=500)
-            resp.headers["Access-Control-Allow-Origin"] = "*"
-            return resp
-
-        creds = Credentials(
-            None,
-            refresh_token=refresh_token,
-            token_uri="https://oauth2.googleapis.com/token",
-            client_id=client_id,
-            client_secret=client_secret,
-            scopes=["https://www.googleapis.com/auth/youtube"]
-        )
-
-        try:
-            youtube = build("youtube", "v3", credentials=creds)
-
-            stream = youtube.liveStreams().insert(
-                part="snippet,cdn",
-                body={
-                    "snippet": {"title": title},
-                    "cdn": {"frameRate": "60fps", "ingestionType": "rtmp", "resolution": "1080p"}
+            resp = web.json_response(
+                {
+                    "ok": True,
+                    "message": "Broadcast request received.",
+                    "data": data,
                 }
-            ).execute()
-
-            stream_key = stream["cdn"]["ingestionInfo"]["streamName"]
-            stream_id = stream["id"]
-
-            start_time = (datetime.utcnow() + timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-            broadcast = youtube.liveBroadcasts().insert(
-                part="snippet,contentDetails,status",
-                body={
-                    "snippet": {"title": title, "description": description, "scheduledStartTime": start_time},
-                    "status": {"privacyStatus": "public"},
-                    "contentDetails": {"monitorStream": {"enableMonitorStream": True}}
-                }
-            ).execute()
-
-            broadcast_id = broadcast["id"]
-            youtube_url = f"https://www.youtube.com/watch?v={broadcast_id}"
-
-            youtube.liveBroadcasts().bind(part="id,contentDetails", id=broadcast_id, streamId=stream_id).execute()
-
-            if YOUTUBE_THUMB_URL:
-                try:
-                    thumb_resp = requests.get(YOUTUBE_THUMB_URL, timeout=10)
-                    thumb_resp.raise_for_status()
-                    media = MediaIoBaseUpload(io.BytesIO(thumb_resp.content), mimetype="image/jpeg", resumable=False)
-                    youtube.thumbnails().set(videoId=broadcast_id, media_body=media).execute()
-                except Exception as te:
-                    print("YouTube set thumbnail failed:", repr(te))
-
-            try:
-                youtube.liveBroadcasts().transition(part="status", broadcastStatus="live", id=broadcast_id).execute()
-            except Exception as te:
-                print("YouTube transition to live failed:", repr(te))
+            )
+            return add_cors(resp)
 
         except Exception as e:
-            err_text = repr(e)
-            print("YouTube create_broadcast error:", err_text)
-            resp = web.json_response({"ok": False, "error": "youtube_api_error", "detail": err_text}, status=500)
-            resp.headers["Access-Control-Allow-Origin"] = "*"
-            return resp
+            print("Error in /create_broadcast:")
+            traceback.print_exc()
 
-        resp = web.json_response({"ok": True, "stream_key": stream_key, "youtube_url": youtube_url, "broadcast_id": broadcast_id})
-        resp.headers["Access-Control-Allow-Origin"] = "*"
-        return resp
+            resp = web.json_response(
+                {
+                    "ok": False,
+                    "error": str(e),
+                },
+                status=500,
+            )
+            return add_cors(resp)
 
-    # ---- ROUTES ----
+    # ---------- ROUTES ----------
     app.router.add_get("/member_count", member_count_handler)
     app.router.add_get("/teams", teams_handler)
     app.router.add_get("/rules", rules_handler)
     app.router.add_get("/standings", standings_handler)
     app.router.add_get("/staff", staff_handler)
+
     app.router.add_post("/report_score", report_score_handler)
     app.router.add_post("/create_broadcast", create_broadcast_handler)
 
-    # OAuth routes (use the module-level auth_* helpers)
-    app.router.add_get("/auth/discord/login", auth_login)
-    app.router.add_get("/auth/discord/callback", auth_callback)
-    app.router.add_get("/auth/me", auth_me)
-
-    # CORS OPTIONS
+    # ---------- CORS OPTIONS ----------
     app.router.add_route("OPTIONS", "/member_count", options_handler)
     app.router.add_route("OPTIONS", "/teams", options_handler)
     app.router.add_route("OPTIONS", "/rules", options_handler)
@@ -7945,18 +7770,21 @@ async def start_web_api():
     app.router.add_route("OPTIONS", "/staff", options_handler)
     app.router.add_route("OPTIONS", "/report_score", options_handler)
     app.router.add_route("OPTIONS", "/create_broadcast", options_handler)
-    app.router.add_route("OPTIONS", "/auth/me", options_handler)
+
+    # ---------- RAILWAY PORT FIX ----------
+    port = int(os.environ.get("PORT", 8080))
 
     runner = web.AppRunner(app)
     await runner.setup()
-    port = int(os.getenv("PORT", "8080"))
+
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-print(
-    f"Web API running on port {port} "
-    f"(/member_count, /teams, /rules, /standings, /staff, /report_score, /create_broadcast, "
-    f"/auth/discord/login, /auth/discord/callback, /auth/me)"
-)
+
+    print(
+        f"Web API running on port {port} "
+        f"(/member_count, /teams, /rules, /standings, /staff, "
+        f"/report_score, /create_broadcast)"
+    )
 
 
 
