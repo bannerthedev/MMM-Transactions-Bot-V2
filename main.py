@@ -691,13 +691,13 @@ def load_player_history() -> dict:
         pass
     return {}
 
-# ---------------- INTENTS ----------------
 INTENTS = discord.Intents.default()
 INTENTS.guilds = True
 INTENTS.members = True
 INTENTS.messages = True
 INTENTS.message_content = True
 INTENTS.presences = True
+
 
 
 # -------- scan-teams command (plain app command) --------
