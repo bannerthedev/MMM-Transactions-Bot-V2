@@ -2,31 +2,37 @@ import asyncio
 import json
 import os
 import re
-from urllib.parse import urlparse, parse_qs
 import random
-import dotenv
-from PIL import Image, ImageDraw, ImageFont
-from datetime import datetime, timedelta
-from typing import Optional
-from dotenv import load_dotenv
-import aiohttp
-import xml.etree.ElementTree as ET
-import bs4
-from bs4 import BeautifulSoup
-from google.oauth2.credentials import Credentials
-from googleapiclient.discovery import build
 import io
 import requests
+import traceback
+import html as html_module
+import xml.etree.ElementTree as ET
+
+from urllib.parse import urlparse, parse_qs
+from datetime import datetime, timedelta
+from typing import Optional, Tuple
+from pathlib import Path
+
+import dotenv
+from dotenv import load_dotenv
+
+import aiohttp
+from aiohttp import web
+
+import bs4
+from bs4 import BeautifulSoup
+
+from PIL import Image, ImageDraw, ImageFont
+
+from google.oauth2.credentials import Credentials
+from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 
-
-
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 from discord import app_commands, Object
-from pathlib import Path
-from discord.ext import tasks
-from aiohttp import web
+
 
 
 # ---------------- CONFIG ----------------
@@ -140,6 +146,20 @@ CODES_STATE_FILE = data_dir / "codes_state.json"
 HEADSETS_FILE = data_dir / "headsets.json"
 GROUPS_FILE = data_dir / "groups.json"
 
+# ---------- STANDINGS WEB CACHE ----------
+STANDINGS_CHANNEL_ID = 1453096022292168947
+STANDINGS_CACHE_FILE = data_dir / "standings_cache.json"
+PERSIST_STANDINGS_CACHE = True
+
+_standings_cache = {
+    "html": None,
+    "raw": None,
+    "ts": None,
+    "message_id": None,
+    "author": None,
+}
+
+_standings_lock = asyncio.Lock()
 
 
 
@@ -423,6 +443,213 @@ def find_member_team_role(member: discord.Member) -> discord.Role | None:
     # Return the highest role in the guild hierarchy
     return max(candidates, key=lambda r: r.position)
 
+# ---------- STANDINGS HELPERS ----------
+
+async def _load_standings_cache():
+    global _standings_cache
+
+    if not PERSIST_STANDINGS_CACHE:
+        return
+
+    try:
+        if not STANDINGS_CACHE_FILE.is_file():
+            return
+
+        with STANDINGS_CACHE_FILE.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        if isinstance(data, dict):
+            _standings_cache.update(data)
+
+    except Exception:
+        print("Failed to load standings cache:")
+        traceback.print_exc()
+
+
+async def _save_standings_cache():
+    if not PERSIST_STANDINGS_CACHE:
+        return
+
+    try:
+        tmp = STANDINGS_CACHE_FILE.with_suffix(".json.tmp")
+
+        with tmp.open("w", encoding="utf-8") as f:
+            json.dump(_standings_cache, f, ensure_ascii=False, indent=2)
+
+        os.replace(tmp, STANDINGS_CACHE_FILE)
+
+    except Exception:
+        print("Failed to save standings cache:")
+        traceback.print_exc()
+
+
+def _discord_message_to_safe_html(msg: discord.Message) -> Tuple[str | None, str]:
+    """
+    Converts a Discord standings message into safe HTML.
+
+    Includes:
+    - message.content
+    - embed title
+    - embed description
+    - embed fields
+
+    Everything is escaped to prevent XSS.
+    """
+
+    raw_parts = []
+    html_parts = []
+
+    if msg.content:
+        raw_parts.append(msg.content)
+
+        escaped_content = html_module.escape(msg.content)
+        html_parts.append(f"<pre class='standings-message'>{escaped_content}</pre>")
+
+    for embed in msg.embeds:
+        embed_chunks = []
+
+        title = getattr(embed, "title", None)
+        description = getattr(embed, "description", None)
+
+        if title:
+            raw_parts.append(title)
+            embed_chunks.append(
+                f"<h3 class='standings-embed-title'>{html_module.escape(title)}</h3>"
+            )
+
+        if description:
+            raw_parts.append(description)
+            escaped_desc = html_module.escape(description).replace("\n", "<br>")
+            embed_chunks.append(
+                f"<div class='standings-embed-description'>{escaped_desc}</div>"
+            )
+
+        try:
+            for field in embed.fields:
+                field_name = html_module.escape(field.name or "")
+                field_value = html_module.escape(field.value or "").replace("\n", "<br>")
+
+                raw_parts.append(f"{field.name}\n{field.value}")
+
+                embed_chunks.append(
+                    "<div class='standings-embed-field'>"
+                    f"<strong>{field_name}</strong><br>"
+                    f"{field_value}"
+                    "</div>"
+                )
+        except Exception:
+            pass
+
+        if embed_chunks:
+            html_parts.append(
+                "<div class='standings-embed'>"
+                + "\n".join(embed_chunks)
+                + "</div>"
+            )
+
+    html = "\n".join(html_parts).strip() if html_parts else None
+    raw = "\n\n".join(raw_parts).strip()
+
+    return html, raw
+
+
+async def _update_standings_from_message(msg: discord.Message):
+    """
+    Updates the cached standings from a Discord message.
+    """
+
+    if msg is None:
+        return
+
+    if not msg.channel or getattr(msg.channel, "id", None) != STANDINGS_CHANNEL_ID:
+        return
+
+    html, raw = _discord_message_to_safe_html(msg)
+
+    if not html and not raw:
+        return
+
+    try:
+        author_name = None
+        if msg.author:
+            author_name = getattr(msg.author, "display_name", None) or getattr(msg.author, "name", None)
+
+        if msg.edited_at:
+            ts = msg.edited_at.isoformat()
+        elif msg.created_at:
+            ts = msg.created_at.isoformat()
+        else:
+            ts = datetime.utcnow().isoformat()
+
+        async with _standings_lock:
+            _standings_cache["html"] = html
+            _standings_cache["raw"] = raw
+            _standings_cache["ts"] = ts
+            _standings_cache["message_id"] = msg.id
+            _standings_cache["author"] = author_name
+
+            await _save_standings_cache()
+
+        print(f"Updated standings cache from message {msg.id}")
+
+    except Exception:
+        print("Failed to update standings cache:")
+        traceback.print_exc()
+
+
+async def _populate_initial_standings_cache():
+    """
+    Used on bot startup.
+    If cache is empty, tries to load standings from:
+    1. pinned message in standings channel
+    2. latest message in standings channel
+    """
+
+    try:
+        await _load_standings_cache()
+
+        async with _standings_lock:
+            has_cache = bool(_standings_cache.get("html") or _standings_cache.get("raw"))
+
+        if has_cache:
+            return
+
+        guild = bot.get_guild(TEST_GUILD_ID)
+        if guild is None:
+            print("Could not populate standings cache: guild not found")
+            return
+
+        ch = guild.get_channel(STANDINGS_CHANNEL_ID)
+
+        if not isinstance(ch, discord.TextChannel):
+            print("Could not populate standings cache: standings channel not found or not a text channel")
+            return
+
+        msg = None
+
+        try:
+            pinned = await ch.pins()
+            if pinned:
+                # newest pinned message first
+                pinned.sort(key=lambda m: m.created_at, reverse=True)
+                msg = pinned[0]
+        except Exception as e:
+            print("Warning: failed to read pinned standings messages:", repr(e))
+
+        if msg is None:
+            try:
+                async for m in ch.history(limit=1):
+                    msg = m
+                    break
+            except Exception as e:
+                print("Warning: failed to read standings channel history:", repr(e))
+
+        if msg:
+            await _update_standings_from_message(msg)
+
+    except Exception:
+        print("Failed to populate initial standings cache:")
+        traceback.print_exc()
 
 
 
@@ -466,12 +693,12 @@ def load_player_history() -> dict:
 
 # ---------------- INTENTS ----------------
 INTENTS = discord.Intents.default()
-INTENTS.members = True
-INTENTS.presences = True
-INTENTS.messages = True
-INTENTS.dm_messages = True
 INTENTS.guilds = True
+INTENTS.members = True
+INTENTS.messages = True
 INTENTS.message_content = True
+INTENTS.presences = True
+
 
 # -------- scan-teams command (plain app command) --------
 @app_commands.command(name="scan-teams", description="Admin: register existing team roles into teams.json")
@@ -7189,12 +7416,74 @@ async def options_handler(request: web.Request):
     return resp
 
 async def start_web_api():
+    await _load_standings_cache()
+
     app = web.Application()
+
+
+    # Helper to compute team_count more robustly
+    async def _compute_team_count(guild: discord.Guild) -> int:
+        if guild is None:
+            return 0
+
+        live_team_ids = set()
+
+        tx_ch = guild.get_channel(TRANSACTIONS_CHANNEL_ID)
+        created_ids = set()
+        disbanded_ids = set()
+
+        if isinstance(tx_ch, discord.TextChannel):
+            HISTORY_LIMIT = 2000  # adjust as needed
+            try:
+                async for msg in tx_ch.history(limit=HISTORY_LIMIT):
+                    content = (msg.content or "")
+                    content_lc = content.lower()
+
+                    # 1) role_mentions provided by discord.py
+                    for role in msg.role_mentions:
+                        if any(k in content_lc for k in ("new team created", "created", "team created")):
+                            created_ids.add(role.id)
+                        if any(k in content_lc for k in ("has been disbanded", "disbanded", "disband")):
+                            disbanded_ids.add(role.id)
+
+                    # 2) raw role mention strings like <@&123456789012345678>
+                    for match in re.findall(r"<@&(\d+)>", content):
+                        try:
+                            rid = int(match)
+                        except Exception:
+                            continue
+                        if any(k in content_lc for k in ("new team created", "created", "team created")):
+                            created_ids.add(rid)
+                        if any(k in content_lc for k in ("has been disbanded", "disbanded", "disband")):
+                            disbanded_ids.add(rid)
+            except Exception as e:
+                # Could be permission error or other API issue
+                print("Warning: failed to read transactions channel history:", repr(e))
+                created_ids = set()
+                disbanded_ids = set()
+        else:
+            print("Warning: transactions channel not found or not a TextChannel")
+
+        live_team_ids = created_ids - disbanded_ids
+        print(f"Debug: created_ids={len(created_ids)}, disbanded_ids={len(disbanded_ids)}, live_from_tx={len(live_team_ids)}")
+
+        # Fallback: detect roles by name pattern if transactions parsing found nothing
+        if not live_team_ids:
+            TEAM_NAME_REGEX = re.compile(r"^(team|t)\b", re.IGNORECASE)
+            for role in guild.roles:
+                # skip managed roles (bot/integrations) and typical staff roles
+                if role.managed:
+                    continue
+                # optionally skip very high/low roles if desired
+                if TEAM_NAME_REGEX.search(role.name):
+                    live_team_ids.add(role.id)
+            print(f"Debug: fallback role-name detection found {len(live_team_ids)} team roles")
+
+        return len(live_team_ids)
 
     # /member_count
     async def member_count_handler(request: web.Request):
         guild = bot.get_guild(TEST_GUILD_ID)
-
         member_count = guild.member_count if guild else 0
 
         online_count = 0
@@ -7202,25 +7491,19 @@ async def start_web_api():
             for m in guild.members:
                 if m.bot:
                     continue
-                if m.status != discord.Status.offline:
-                    online_count += 1
+                try:
+                    if m.status != discord.Status.offline:
+                        online_count += 1
+                except Exception:
+                    # Some member objects may not have status available depending on intents
+                    pass
 
         team_count = 0
-        if guild is not None:
-            tx_ch = guild.get_channel(TRANSACTIONS_CHANNEL_ID)
-            if isinstance(tx_ch, discord.TextChannel):
-                created_ids = set()
-                disbanded_ids = set()
-                async for msg in tx_ch.history(limit=500):
-                    content = (msg.content or "").lower()
-                    if "new team created" in content:
-                        for role in msg.role_mentions:
-                            created_ids.add(role.id)
-                    if "has been disbanded" in content:
-                        for role in msg.role_mentions:
-                            disbanded_ids.add(role.id)
-                live_team_ids = created_ids - disbanded_ids
-                team_count = len(live_team_ids)
+        try:
+            team_count = await _compute_team_count(guild)
+        except Exception as e:
+            print("Error computing team count:", repr(e))
+            team_count = 0
 
         # STATUS: Bracket / Seeding / Idle
         status = "Idle"
@@ -7348,6 +7631,41 @@ async def start_web_api():
         resp.headers["Access-Control-Allow-Origin"] = "*"
         return resp
 
+
+    # /standings
+    async def standings_handler(request: web.Request):
+        async with _standings_lock:
+            has_standings = bool(_standings_cache.get("html") or _standings_cache.get("raw"))
+
+            if not has_standings:
+                resp = web.json_response(
+                    {
+                        "ok": False,
+                        "error": "no_standings",
+                        "html": None,
+                        "raw": None,
+                        "ts": None,
+                    },
+                    status=404,
+                )
+                resp.headers["Access-Control-Allow-Origin"] = "*"
+                return resp
+
+            resp = web.json_response(
+                {
+                    "ok": True,
+                    "html": _standings_cache.get("html"),
+                    "raw": _standings_cache.get("raw"),
+                    "ts": _standings_cache.get("ts"),
+                    "message_id": _standings_cache.get("message_id"),
+                    "author": _standings_cache.get("author"),
+                }
+            )
+            resp.headers["Access-Control-Allow-Origin"] = "*"
+            return resp
+
+
+
     # /rules
     async def rules_handler(request: web.Request):
         try:
@@ -7364,15 +7682,6 @@ async def start_web_api():
 
     # /report_score – called by ref.html when a score hits 5
     async def report_score_handler(request: web.Request):
-        """
-        JSON body:
-        {
-          "team1": "Banner",
-          "team2": "Test",
-          "score1": 5,
-          "score2": 0
-        }
-        """
         try:
             data = await request.json()
         except Exception:
@@ -7441,16 +7750,6 @@ async def start_web_api():
 
     # /create_broadcast – actually creates a YouTube live (requires YouTube OAuth)
     async def create_broadcast_handler(request: web.Request):
-        """
-        JSON body:
-        {
-          "team1": "Banner",
-          "team2": "Test",
-          "round": "Bracket Round 1",
-          "title": "...",        # built by caster.html
-          "description": "..."   # base description
-        }
-        """
         try:
             data = await request.json()
         except Exception:
@@ -7468,7 +7767,6 @@ async def start_web_api():
             resp.headers["Access-Control-Allow-Origin"] = "*"
             return resp
 
-        # Load YouTube OAuth credentials from env
         client_id = os.getenv("YOUTUBE_CLIENT_ID")
         client_secret = os.getenv("YOUTUBE_CLIENT_SECRET")
         refresh_token = os.getenv("YOUTUBE_REFRESH_TOKEN")
@@ -7478,7 +7776,6 @@ async def start_web_api():
             resp.headers["Access-Control-Allow-Origin"] = "*"
             return resp
 
-        # Build Credentials object with refresh token
         creds = Credentials(
             None,
             refresh_token=refresh_token,
@@ -7491,98 +7788,55 @@ async def start_web_api():
         try:
             youtube = build("youtube", "v3", credentials=creds)
 
-            # 1) Create liveStream (get stream key)
             stream = youtube.liveStreams().insert(
                 part="snippet,cdn",
                 body={
-                    "snippet": {
-                        "title": title
-                    },
-                    "cdn": {
-                        "frameRate": "60fps",
-                        "ingestionType": "rtmp",
-                        "resolution": "1080p"
-                    }
+                    "snippet": {"title": title},
+                    "cdn": {"frameRate": "60fps", "ingestionType": "rtmp", "resolution": "1080p"}
                 }
             ).execute()
 
             stream_key = stream["cdn"]["ingestionInfo"]["streamName"]
             stream_id = stream["id"]
 
-            # 2) Create liveBroadcast (scheduled ~5 minutes from now, UTC)
             start_time = (datetime.utcnow() + timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
             broadcast = youtube.liveBroadcasts().insert(
                 part="snippet,contentDetails,status",
                 body={
-                    "snippet": {
-                        "title": title,
-                        "description": description,
-                        "scheduledStartTime": start_time,
-                    },
-                    "status": {
-                        "privacyStatus": "public"
-                    },
-                    "contentDetails": {
-                        "monitorStream": {"enableMonitorStream": True}
-                    }
+                    "snippet": {"title": title, "description": description, "scheduledStartTime": start_time},
+                    "status": {"privacyStatus": "public"},
+                    "contentDetails": {"monitorStream": {"enableMonitorStream": True}}
                 }
             ).execute()
 
             broadcast_id = broadcast["id"]
             youtube_url = f"https://www.youtube.com/watch?v={broadcast_id}"
 
-            # 3) Bind stream to broadcast
-            youtube.liveBroadcasts().bind(
-                part="id,contentDetails",
-                id=broadcast_id,
-                streamId=stream_id
-            ).execute()
+            youtube.liveBroadcasts().bind(part="id,contentDetails", id=broadcast_id, streamId=stream_id).execute()
 
-            # 4) Set thumbnail using your fixed image
             if YOUTUBE_THUMB_URL:
                 try:
                     thumb_resp = requests.get(YOUTUBE_THUMB_URL, timeout=10)
                     thumb_resp.raise_for_status()
-                    media = MediaIoBaseUpload(
-                        io.BytesIO(thumb_resp.content),
-                        mimetype="image/jpeg",
-                        resumable=False,
-                    )
-                    youtube.thumbnails().set(
-                        videoId=broadcast_id,
-                        media_body=media
-                    ).execute()
+                    media = MediaIoBaseUpload(io.BytesIO(thumb_resp.content), mimetype="image/jpeg", resumable=False)
+                    youtube.thumbnails().set(videoId=broadcast_id, media_body=media).execute()
                 except Exception as te:
                     print("YouTube set thumbnail failed:", repr(te))
 
-            # 5) Try to transition to live
             try:
-                youtube.liveBroadcasts().transition(
-                    part="status",
-                    broadcastStatus="live",
-                    id=broadcast_id,
-                ).execute()
+                youtube.liveBroadcasts().transition(part="status", broadcastStatus="live", id=broadcast_id).execute()
             except Exception as te:
                 print("YouTube transition to live failed:", repr(te))
 
         except Exception as e:
-            # Log server-side and also return the message to the client for debugging
             err_text = repr(e)
             print("YouTube create_broadcast error:", err_text)
-            resp = web.json_response(
-                {"ok": False, "error": "youtube_api_error", "detail": err_text},
-                status=500,
-            )
+            resp = web.json_response({"ok": False, "error": "youtube_api_error", "detail": err_text}, status=500)
             resp.headers["Access-Control-Allow-Origin"] = "*"
             return resp
 
-        resp = web.json_response({
-            "ok": True,
-            "stream_key": stream_key,
-            "youtube_url": youtube_url,
-            "broadcast_id": broadcast_id,
-        })
+        resp = web.json_response({"ok": True, "stream_key": stream_key, "youtube_url": youtube_url, "broadcast_id": broadcast_id})
         resp.headers["Access-Control-Allow-Origin"] = "*"
         return resp
 
@@ -7590,6 +7844,7 @@ async def start_web_api():
     app.router.add_get("/member_count", member_count_handler)
     app.router.add_get("/teams", teams_handler)
     app.router.add_get("/rules", rules_handler)
+    app.router.add_get("/standings", standings_handler)
     app.router.add_post("/report_score", report_score_handler)
     app.router.add_post("/create_broadcast", create_broadcast_handler)
 
@@ -7602,6 +7857,7 @@ async def start_web_api():
     app.router.add_route("OPTIONS", "/member_count", options_handler)
     app.router.add_route("OPTIONS", "/teams", options_handler)
     app.router.add_route("OPTIONS", "/rules", options_handler)
+    app.router.add_route("OPTIONS", "/standings", options_handler)
     app.router.add_route("OPTIONS", "/report_score", options_handler)
     app.router.add_route("OPTIONS", "/create_broadcast", options_handler)
     app.router.add_route("OPTIONS", "/auth/me", options_handler)
@@ -7613,7 +7869,7 @@ async def start_web_api():
     await site.start()
     print(
         f"Web API running on port {port} "
-        f"(/member_count, /teams, /rules, /report_score, /create_broadcast, "
+        f"(/member_count, /teams, /rules, /standings, /report_score, /create_broadcast, "
         f"/auth/discord/login, /auth/discord/callback, /auth/me)"
     )
 
@@ -7694,6 +7950,52 @@ bot = MainBot()
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user} (ID: {bot.user.id})")
+    await _populate_initial_standings_cache()
+
+@bot.listen("on_message")
+async def standings_on_message(message: discord.Message):
+    if message.author and message.author.bot:
+        return
+
+    if message.channel and getattr(message.channel, "id", None) == STANDINGS_CHANNEL_ID:
+        await _update_standings_from_message(message)
+
+
+@bot.listen("on_message_edit")
+async def standings_on_message_edit(before: discord.Message, after: discord.Message):
+    if after.channel and getattr(after.channel, "id", None) == STANDINGS_CHANNEL_ID:
+        await _update_standings_from_message(after)
+
+
+@bot.listen("on_guild_channel_pins_update")
+async def standings_on_guild_channel_pins_update(channel: discord.abc.GuildChannel, last_pin):
+    if getattr(channel, "id", None) != STANDINGS_CHANNEL_ID:
+        return
+
+    if not isinstance(channel, discord.TextChannel):
+        return
+
+    msg = None
+
+    try:
+        pinned = await channel.pins()
+        if pinned:
+            pinned.sort(key=lambda m: m.created_at, reverse=True)
+            msg = pinned[0]
+    except Exception as e:
+        print("Warning: failed to read standings pins:", repr(e))
+
+    if msg is None:
+        try:
+            async for m in channel.history(limit=1):
+                msg = m
+                break
+        except Exception as e:
+            print("Warning: failed to read latest standings message:", repr(e))
+
+    if msg:
+        await _update_standings_from_message(msg)
+
 
 if __name__ == "__main__":
     bot.run(os.getenv("BOT_TOKEN"))
