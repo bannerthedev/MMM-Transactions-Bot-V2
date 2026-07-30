@@ -7680,6 +7680,89 @@ async def start_web_api():
             resp.headers["Access-Control-Allow-Origin"] = "*"
             return resp
 
+
+    # /staff
+    async def staff_handler(request: web.Request):
+        try:
+            guild = bot.get_guild(TEST_GUILD_ID)
+
+            if guild is None:
+                resp = web.json_response(
+                    {
+                        "ok": False,
+                        "error": "Guild not found.",
+                        "staff": [],
+                    },
+                    status=404,
+                )
+                resp.headers["Access-Control-Allow-Origin"] = "*"
+                return resp
+
+            staff_members = []
+
+            for member in guild.members:
+                matching_roles = [
+                    role for role in member.roles
+                    if role.id in STAFF_ROLE_IDS
+                ]
+
+                if not matching_roles:
+                    continue
+
+                # Pick the highest staff role from the matching roles
+                top_staff_role = max(matching_roles, key=lambda r: r.position)
+
+                username = str(member)
+                display_name = member.display_name
+
+                name_check = f"{username} {display_name}".lower()
+                highlighted = (
+                    "banner" in name_check or
+                    "sova" in name_check
+                )
+
+                staff_members.append(
+                    {
+                        "id": str(member.id),
+                        "username": username,
+                        "display_name": display_name,
+                        "role": top_staff_role.name,
+                        "avatar_url": member.display_avatar.url,
+                        "highlighted": highlighted,
+                    }
+                )
+
+            # Sort by role position, highest first
+            staff_members.sort(
+                key=lambda item: item.get("role", "").lower()
+            )
+
+            resp = web.json_response(
+                {
+                    "ok": True,
+                    "staff": staff_members,
+                }
+            )
+            resp.headers["Access-Control-Allow-Origin"] = "*"
+            return resp
+
+        except Exception as e:
+            print("Failed to load staff:")
+            traceback.print_exc()
+
+            resp = web.json_response(
+                {
+                    "ok": False,
+                    "error": "Failed to load staff.",
+                    "staff": [],
+                },
+                status=500,
+            )
+            resp.headers["Access-Control-Allow-Origin"] = "*"
+            return resp
+
+
+
     # /report_score – called by ref.html when a score hits 5
     async def report_score_handler(request: web.Request):
         try:
@@ -7845,6 +7928,7 @@ async def start_web_api():
     app.router.add_get("/teams", teams_handler)
     app.router.add_get("/rules", rules_handler)
     app.router.add_get("/standings", standings_handler)
+    app.router.add_get("/staff", staff_handler)
     app.router.add_post("/report_score", report_score_handler)
     app.router.add_post("/create_broadcast", create_broadcast_handler)
 
@@ -7858,6 +7942,7 @@ async def start_web_api():
     app.router.add_route("OPTIONS", "/teams", options_handler)
     app.router.add_route("OPTIONS", "/rules", options_handler)
     app.router.add_route("OPTIONS", "/standings", options_handler)
+    app.router.add_route("OPTIONS", "/staff", options_handler)
     app.router.add_route("OPTIONS", "/report_score", options_handler)
     app.router.add_route("OPTIONS", "/create_broadcast", options_handler)
     app.router.add_route("OPTIONS", "/auth/me", options_handler)
@@ -7867,11 +7952,12 @@ async def start_web_api():
     port = int(os.getenv("PORT", "8080"))
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
-    print(
-        f"Web API running on port {port} "
-        f"(/member_count, /teams, /rules, /standings, /report_score, /create_broadcast, "
-        f"/auth/discord/login, /auth/discord/callback, /auth/me)"
-    )
+print(
+    f"Web API running on port {port} "
+    f"(/member_count, /teams, /rules, /standings, /staff, /report_score, /create_broadcast, "
+    f"/auth/discord/login, /auth/discord/callback, /auth/me)"
+)
+
 
 
 # ---------------- BOT SETUP ----------------
