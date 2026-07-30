@@ -7619,89 +7619,138 @@ async def start_web_api():
                 resp.headers["Access-Control-Allow-Origin"] = "*"
                 return resp
 
-            staff_members = []
+            # These are the Discord roles that count as staff.
+            # Add/remove role names here based on your actual server roles.
+            STAFF_ROLE_NAMES = {
+                "owner",
+                "dev",
+                "developer",
+                "admin",
+                "administrator",
+                "mod",
+                "moderator",
+                "helper",
+                "staff",
+                "manager",
+                "head staff",
+            }
 
-            # Change/add staff usernames here if needed
-            STAFF_USERNAMES = {
+            # Custom display role names for specific users
+            CUSTOM_DISPLAY_ROLES = {
                 "banner1234": "Dev",
                 "mmm.compsova": "OWNER",
             }
 
+            # Fallback colors if Discord role has no color
+            FALLBACK_ROLE_COLORS = {
+                "OWNER": "#facc15",
+                "Owner": "#facc15",
+                "Dev": "#3b82f6",
+                "Developer": "#3b82f6",
+                "Admin": "#ef4444",
+                "Administrator": "#ef4444",
+                "Moderator": "#22c55e",
+                "Mod": "#22c55e",
+                "Helper": "#a855f7",
+                "Staff": "#f97316",
+                "Manager": "#06b6d4",
+            }
+
+            staff_members = []
+
             for member in guild.members:
-                username_key = (member.name or "").lower()
-                display_key = (member.display_name or "").lower()
-                global_key = ""
-
-                try:
-                    global_key = (member.global_name or "").lower()
-                except Exception:
-                    global_key = ""
-
-                # Match by username, display name, or global name
-                matched_role_name = None
-
-                if username_key in STAFF_USERNAMES:
-                    matched_role_name = STAFF_USERNAMES[username_key]
-                elif display_key in STAFF_USERNAMES:
-                    matched_role_name = STAFF_USERNAMES[display_key]
-                elif global_key in STAFF_USERNAMES:
-                    matched_role_name = STAFF_USERNAMES[global_key]
-
-                if not matched_role_name:
+                if member.bot:
                     continue
 
-                # Get top colored role from Discord
-                colored_role = None
+                username_lower = (member.name or "").lower()
+                display_lower = (member.display_name or "").lower()
+                global_lower = (getattr(member, "global_name", None) or "").lower()
 
-                try:
-                    colored_roles = [
-                        role for role in member.roles
-                        if role.name != "@everyone" and role.color.value != 0
-                    ]
+                matched_staff_roles = []
 
-                    if colored_roles:
-                        colored_role = max(colored_roles, key=lambda r: r.position)
-                except Exception:
-                    colored_role = None
+                for role in member.roles:
+                    if role.name == "@everyone":
+                        continue
 
-                if colored_role:
-                    role_color = str(colored_role.color)
+                    role_name_lower = role.name.lower()
+
+                    if role_name_lower in STAFF_ROLE_NAMES:
+                        matched_staff_roles.append(role)
+
+                # Also force Banner and Sova to show even if role names do not match
+                is_custom_staff = (
+                    username_lower in CUSTOM_DISPLAY_ROLES
+                    or display_lower in CUSTOM_DISPLAY_ROLES
+                    or global_lower in CUSTOM_DISPLAY_ROLES
+                )
+
+                if not matched_staff_roles and not is_custom_staff:
+                    continue
+
+                # Pick highest staff role by Discord position
+                highest_staff_role = None
+                if matched_staff_roles:
+                    highest_staff_role = max(matched_staff_roles, key=lambda r: r.position)
+
+                # Decide displayed role name
+                display_role = None
+
+                if username_lower in CUSTOM_DISPLAY_ROLES:
+                    display_role = CUSTOM_DISPLAY_ROLES[username_lower]
+                elif display_lower in CUSTOM_DISPLAY_ROLES:
+                    display_role = CUSTOM_DISPLAY_ROLES[display_lower]
+                elif global_lower in CUSTOM_DISPLAY_ROLES:
+                    display_role = CUSTOM_DISPLAY_ROLES[global_lower]
+                elif highest_staff_role:
+                    display_role = highest_staff_role.name
                 else:
-                    # fallback colors
-                    if matched_role_name == "OWNER":
-                        role_color = "#facc15"
-                    elif matched_role_name == "Dev":
-                        role_color = "#38bdf8"
-                    else:
-                        role_color = "#ffffff"
+                    display_role = "Staff"
+
+                # Decide role color
+                role_color = FALLBACK_ROLE_COLORS.get(display_role, "#facc15")
+
+                if highest_staff_role and highest_staff_role.color and highest_staff_role.color.value != 0:
+                    role_color = str(highest_staff_role.color)
 
                 avatar_url = None
-
                 try:
                     avatar_url = member.display_avatar.url
                 except Exception:
                     avatar_url = None
+
+                highlighted = display_role.lower() in {"owner", "dev", "developer"}
 
                 staff_members.append(
                     {
                         "id": str(member.id),
                         "username": member.name,
                         "display_name": member.display_name,
-                        "role": matched_role_name,
+                        "role": display_role,
                         "role_color": role_color,
                         "avatar": avatar_url,
-                        "highlighted": matched_role_name in ["Dev", "OWNER"],
+                        "highlighted": highlighted,
                     }
                 )
 
-            # Sort OWNER first, then Dev
             role_order = {
-                "OWNER": 0,
-                "Dev": 1,
+                "owner": 1,
+                "dev": 2,
+                "developer": 2,
+                "admin": 3,
+                "administrator": 3,
+                "manager": 4,
+                "head staff": 5,
+                "moderator": 6,
+                "mod": 6,
+                "helper": 7,
+                "staff": 8,
             }
 
             staff_members.sort(
-                key=lambda m: role_order.get(m.get("role"), 99)
+                key=lambda m: (
+                    role_order.get(str(m.get("role", "")).lower(), 99),
+                    str(m.get("display_name", "")).lower(),
+                )
             )
 
             resp = web.json_response(
@@ -7720,7 +7769,7 @@ async def start_web_api():
             resp = web.json_response(
                 {
                     "ok": False,
-                    "error": "staff_handler_failed",
+                    "error": "staff_error",
                     "staff": [],
                 },
                 status=500,
