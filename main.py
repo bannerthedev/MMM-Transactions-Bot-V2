@@ -7602,7 +7602,7 @@ async def start_web_api():
             )
             return add_cors(resp)
 
-    # ---------- /staff ----------
+    # /staff
     async def staff_handler(request: web.Request):
         try:
             guild = bot.get_guild(TEST_GUILD_ID)
@@ -7616,90 +7616,117 @@ async def start_web_api():
                     },
                     status=404,
                 )
-                return add_cors(resp)
+                resp.headers["Access-Control-Allow-Origin"] = "*"
+                return resp
 
-            staff = []
+            staff_members = []
 
-            # Change these role names if your staff roles are named differently.
-            staff_role_names = {
-                "owner",
-                "admin",
-                "administrator",
-                "moderator",
-                "mod",
-                "staff",
-                "developer",
-                "dev",
+            # Change/add staff usernames here if needed
+            STAFF_USERNAMES = {
+                "banner1234": "Dev",
+                "mmm.compsova": "OWNER",
             }
 
-            highlighted_names = {"banner", "sova"}
-
             for member in guild.members:
-                if member.bot:
+                username_key = (member.name or "").lower()
+                display_key = (member.display_name or "").lower()
+                global_key = ""
+
+                try:
+                    global_key = (member.global_name or "").lower()
+                except Exception:
+                    global_key = ""
+
+                # Match by username, display name, or global name
+                matched_role_name = None
+
+                if username_key in STAFF_USERNAMES:
+                    matched_role_name = STAFF_USERNAMES[username_key]
+                elif display_key in STAFF_USERNAMES:
+                    matched_role_name = STAFF_USERNAMES[display_key]
+                elif global_key in STAFF_USERNAMES:
+                    matched_role_name = STAFF_USERNAMES[global_key]
+
+                if not matched_role_name:
                     continue
 
-                member_roles = [
-                    role.name for role in member.roles if role.name != "@everyone"
-                ]
+                # Get top colored role from Discord
+                colored_role = None
 
-                is_staff = any(
-                    role_name.lower() in staff_role_names
-                    for role_name in member_roles
-                )
+                try:
+                    colored_roles = [
+                        role for role in member.roles
+                        if role.name != "@everyone" and role.color.value != 0
+                    ]
 
-                name_lower = member.name.lower()
-                display_lower = member.display_name.lower()
+                    if colored_roles:
+                        colored_role = max(colored_roles, key=lambda r: r.position)
+                except Exception:
+                    colored_role = None
 
-                is_highlighted = (
-                    name_lower in highlighted_names
-                    or display_lower in highlighted_names
-                )
+                if colored_role:
+                    role_color = str(colored_role.color)
+                else:
+                    # fallback colors
+                    if matched_role_name == "OWNER":
+                        role_color = "#facc15"
+                    elif matched_role_name == "Dev":
+                        role_color = "#38bdf8"
+                    else:
+                        role_color = "#ffffff"
 
-                if not is_staff and not is_highlighted:
-                    continue
+                avatar_url = None
 
-                main_role = "Member"
+                try:
+                    avatar_url = member.display_avatar.url
+                except Exception:
+                    avatar_url = None
 
-                for role in reversed(member.roles):
-                    if role.name != "@everyone":
-                        main_role = role.name
-                        break
-
-                staff.append(
+                staff_members.append(
                     {
                         "id": str(member.id),
                         "username": member.name,
                         "display_name": member.display_name,
-                        "role": main_role,
-                        "roles": member_roles,
-                        "avatar": member.display_avatar.url,
-                        "highlighted": is_highlighted,
+                        "role": matched_role_name,
+                        "role_color": role_color,
+                        "avatar": avatar_url,
+                        "highlighted": matched_role_name in ["Dev", "OWNER"],
                     }
                 )
+
+            # Sort OWNER first, then Dev
+            role_order = {
+                "OWNER": 0,
+                "Dev": 1,
+            }
+
+            staff_members.sort(
+                key=lambda m: role_order.get(m.get("role"), 99)
+            )
 
             resp = web.json_response(
                 {
                     "ok": True,
-                    "staff": staff,
-                    "count": len(staff),
-                    "highlight_note": "Highlighted means the dev or the owner of the server.",
+                    "staff": staff_members,
                 }
             )
-            return add_cors(resp)
+            resp.headers["Access-Control-Allow-Origin"] = "*"
+            return resp
 
         except Exception as e:
-            print("Error in /staff:")
+            print("Staff handler error:", repr(e))
             traceback.print_exc()
 
             resp = web.json_response(
                 {
                     "ok": False,
-                    "error": str(e),
+                    "error": "staff_handler_failed",
                     "staff": [],
                 },
                 status=500,
             )
-            return add_cors(resp)
+            resp.headers["Access-Control-Allow-Origin"] = "*"
+            return resp
 
     # ---------- Placeholder POST handlers if you already use these ----------
     async def report_score_handler(request: web.Request):
@@ -7752,17 +7779,19 @@ async def start_web_api():
             )
             return add_cors(resp)
 
-    # ---------- ROUTES ----------
+    # ---- ROUTES ----
     app.router.add_get("/member_count", member_count_handler)
     app.router.add_get("/teams", teams_handler)
     app.router.add_get("/rules", rules_handler)
     app.router.add_get("/standings", standings_handler)
     app.router.add_get("/staff", staff_handler)
+    app.router.add_post("/report_score", report_score_handler)
+    app.router.add_post("/create_broadcast", create_broadcast_handler)
 
     app.router.add_post("/report_score", report_score_handler)
     app.router.add_post("/create_broadcast", create_broadcast_handler)
 
-    # ---------- CORS OPTIONS ----------
+    # CORS OPTIONS
     app.router.add_route("OPTIONS", "/member_count", options_handler)
     app.router.add_route("OPTIONS", "/teams", options_handler)
     app.router.add_route("OPTIONS", "/rules", options_handler)
@@ -7770,6 +7799,7 @@ async def start_web_api():
     app.router.add_route("OPTIONS", "/staff", options_handler)
     app.router.add_route("OPTIONS", "/report_score", options_handler)
     app.router.add_route("OPTIONS", "/create_broadcast", options_handler)
+    app.router.add_route("OPTIONS", "/auth/me", options_handler)
 
     # ---------- RAILWAY PORT FIX ----------
     port = int(os.environ.get("PORT", 8080))
@@ -7782,9 +7812,11 @@ async def start_web_api():
 
     print(
         f"Web API running on port {port} "
-        f"(/member_count, /teams, /rules, /standings, /staff, "
-        f"/report_score, /create_broadcast)"
+        f"(/member_count, /teams, /rules, /standings, /staff, /report_score, /create_broadcast, "
+        f"/auth/discord/login, /auth/discord/callback, /auth/me)"
     )
+
+
 
 
 
