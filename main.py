@@ -7619,98 +7619,85 @@ async def start_web_api():
                 resp.headers["Access-Control-Allow-Origin"] = "*"
                 return resp
 
-            # These are the Discord roles that count as staff.
-            # Add/remove role names here based on your actual server roles.
+            staff = []
+
+            CUSTOM_DISPLAY_ROLES = {
+                "banner1234": "Dev",
+                "mmm.compsova": "OWNER",
+            }
+
+            FALLBACK_ROLE_COLORS = {
+                "owner": "#facc15",
+                "dev": "#3b82f6",
+                "admin": "#ef4444",
+                "moderator": "#22c55e",
+                "helper": "#a855f7",
+                "staff": "#f97316",
+            }
+
             STAFF_ROLE_NAMES = {
                 "owner",
                 "dev",
                 "developer",
                 "admin",
                 "administrator",
-                "mod",
                 "moderator",
+                "mod",
                 "helper",
                 "staff",
-                "manager",
-                "head staff",
             }
 
-            # Custom display role names for specific users
-            CUSTOM_DISPLAY_ROLES = {
-                "banner1234": "Dev",
-                "mmm.compsova": "OWNER",
-            }
+            def normalize_name(value):
+                return str(value or "").strip().lower()
 
-            # Fallback colors if Discord role has no color
-            FALLBACK_ROLE_COLORS = {
-                "OWNER": "#facc15",
-                "Owner": "#facc15",
-                "Dev": "#3b82f6",
-                "Developer": "#3b82f6",
-                "Admin": "#ef4444",
-                "Administrator": "#ef4444",
-                "Moderator": "#22c55e",
-                "Mod": "#22c55e",
-                "Helper": "#a855f7",
-                "Staff": "#f97316",
-                "Manager": "#06b6d4",
-            }
+            def get_member_names(member):
+                names = {
+                    normalize_name(member.name),
+                    normalize_name(member.display_name),
+                }
 
-            staff_members = []
+                global_name = getattr(member, "global_name", None)
+                if global_name:
+                    names.add(normalize_name(global_name))
+
+                return names
 
             for member in guild.members:
                 if member.bot:
                     continue
 
-                username_lower = (member.name or "").lower()
-                display_lower = (member.display_name or "").lower()
-                global_lower = (getattr(member, "global_name", None) or "").lower()
+                member_names = get_member_names(member)
 
-                matched_staff_roles = []
+                custom_role = None
+                for username_key, display_role in CUSTOM_DISPLAY_ROLES.items():
+                    if normalize_name(username_key) in member_names:
+                        custom_role = display_role
+                        break
 
-                for role in member.roles:
-                    if role.name == "@everyone":
-                        continue
+                matched_staff_role = None
 
-                    role_name_lower = role.name.lower()
+                for role in sorted(member.roles, key=lambda r: r.position, reverse=True):
+                    role_name_normalized = normalize_name(role.name)
 
-                    if role_name_lower in STAFF_ROLE_NAMES:
-                        matched_staff_roles.append(role)
+                    if role_name_normalized in STAFF_ROLE_NAMES:
+                        matched_staff_role = role
+                        break
 
-                # Also force Banner and Sova to show even if role names do not match
-                is_custom_staff = (
-                    username_lower in CUSTOM_DISPLAY_ROLES
-                    or display_lower in CUSTOM_DISPLAY_ROLES
-                    or global_lower in CUSTOM_DISPLAY_ROLES
-                )
-
-                if not matched_staff_roles and not is_custom_staff:
+                if not custom_role and not matched_staff_role:
                     continue
 
-                # Pick highest staff role by Discord position
-                highest_staff_role = None
-                if matched_staff_roles:
-                    highest_staff_role = max(matched_staff_roles, key=lambda r: r.position)
+                display_role_name = custom_role or matched_staff_role.name
 
-                # Decide displayed role name
-                display_role = None
+                role_color = None
 
-                if username_lower in CUSTOM_DISPLAY_ROLES:
-                    display_role = CUSTOM_DISPLAY_ROLES[username_lower]
-                elif display_lower in CUSTOM_DISPLAY_ROLES:
-                    display_role = CUSTOM_DISPLAY_ROLES[display_lower]
-                elif global_lower in CUSTOM_DISPLAY_ROLES:
-                    display_role = CUSTOM_DISPLAY_ROLES[global_lower]
-                elif highest_staff_role:
-                    display_role = highest_staff_role.name
-                else:
-                    display_role = "Staff"
+                if matched_staff_role and matched_staff_role.color and matched_staff_role.color.value != 0:
+                    role_color = str(matched_staff_role.color)
 
-                # Decide role color
-                role_color = FALLBACK_ROLE_COLORS.get(display_role, "#facc15")
-
-                if highest_staff_role and highest_staff_role.color and highest_staff_role.color.value != 0:
-                    role_color = str(highest_staff_role.color)
+                if not role_color:
+                    role_color = FALLBACK_ROLE_COLORS.get(
+                        normalize_name(display_role_name),
+                        "#facc15",
+                    )
 
                 avatar_url = None
                 try:
@@ -7718,58 +7705,55 @@ async def start_web_api():
                 except Exception:
                     avatar_url = None
 
-                highlighted = display_role.lower() in {"owner", "dev", "developer"}
-
-                staff_members.append(
+                staff.append(
                     {
                         "id": str(member.id),
                         "username": member.name,
                         "display_name": member.display_name,
-                        "role": display_role,
+                        "role": display_role_name,
                         "role_color": role_color,
                         "avatar": avatar_url,
-                        "highlighted": highlighted,
+                        "highlighted": normalize_name(display_role_name) in {"owner", "dev"},
                     }
                 )
 
             role_order = {
-                "owner": 1,
-                "dev": 2,
-                "developer": 2,
-                "admin": 3,
-                "administrator": 3,
-                "manager": 4,
-                "head staff": 5,
-                "moderator": 6,
-                "mod": 6,
-                "helper": 7,
-                "staff": 8,
+                "owner": 0,
+                "dev": 1,
+                "developer": 1,
+                "admin": 2,
+                "administrator": 2,
+                "moderator": 3,
+                "mod": 3,
+                "helper": 4,
+                "staff": 5,
             }
 
-            staff_members.sort(
-                key=lambda m: (
-                    role_order.get(str(m.get("role", "")).lower(), 99),
-                    str(m.get("display_name", "")).lower(),
+            staff.sort(
+                key=lambda x: (
+                    role_order.get(normalize_name(x.get("role")), 99),
+                    normalize_name(x.get("display_name")),
                 )
             )
 
             resp = web.json_response(
                 {
                     "ok": True,
-                    "staff": staff_members,
+                    "staff": staff,
+                    "count": len(staff),
                 }
             )
             resp.headers["Access-Control-Allow-Origin"] = "*"
             return resp
 
-        except Exception as e:
-            print("Staff handler error:", repr(e))
+        except Exception:
+            print("Failed in /staff handler:")
             traceback.print_exc()
 
             resp = web.json_response(
                 {
                     "ok": False,
-                    "error": "staff_error",
+                    "error": "staff_handler_failed",
                     "staff": [],
                 },
                 status=500,
@@ -7834,8 +7818,6 @@ async def start_web_api():
     app.router.add_get("/rules", rules_handler)
     app.router.add_get("/standings", standings_handler)
     app.router.add_get("/staff", staff_handler)
-    app.router.add_post("/report_score", report_score_handler)
-    app.router.add_post("/create_broadcast", create_broadcast_handler)
 
     app.router.add_post("/report_score", report_score_handler)
     app.router.add_post("/create_broadcast", create_broadcast_handler)
