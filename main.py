@@ -7602,21 +7602,24 @@ async def start_web_api():
             )
             return add_cors(resp)
 
-    # ---------- /staff ----------
+    # /staff
     async def staff_handler(request: web.Request):
         try:
             guild = bot.get_guild(TEST_GUILD_ID)
 
             if guild is None:
-                resp = web.json_response({
-                    "ok": False,
-                    "error": "guild_not_found",
-                    "staff": []
-                }, status=404)
+                resp = web.json_response(
+                    {
+                        "ok": False,
+                        "error": "guild_not_found",
+                        "staff": [],
+                    },
+                    status=500,
+                )
                 resp.headers["Access-Control-Allow-Origin"] = "*"
                 return resp
 
-            # Try to make sure members are loaded
+            # Make sure members are loaded
             try:
                 await guild.chunk(cache=True)
             except Exception:
@@ -7639,119 +7642,119 @@ async def start_web_api():
             }
 
             FALLBACK_ROLE_COLORS = {
-                "owner": "#facc15",
-                "dev": "#3b82f6",
-                "admin": "#ef4444",
-                "administrator": "#ef4444",
-                "moderator": "#22c55e",
-                "mod": "#22c55e",
-                "helper": "#a855f7",
-                "staff": "#ffffff",
+                "OWNER": "#facc15",
+                "Dev": "#3b82f6",
+                "Admin": "#ef4444",
+                "Moderator": "#22c55e",
+                "Helper": "#a855f7",
+                "Staff": "#ffffff",
             }
 
             staff = []
 
-            members = list(guild.members)
+            for member in guild.members:
+                names_to_check = [
+                    member.name,
+                    member.display_name,
+                    getattr(member, "global_name", None),
+                ]
 
-            # Fallback fetch if member cache is empty/incomplete
-            if len(members) <= 1:
-                try:
-                    members = [m async for m in guild.fetch_members(limit=None)]
-                except Exception:
-                    pass
-
-            for member in members:
-                username = (member.name or "").lower()
-                display_name = (member.display_name or "").lower()
-                global_name = (getattr(member, "global_name", None) or "").lower()
-
-                possible_names = {username, display_name, global_name}
+                names_lower = [
+                    str(n).lower()
+                    for n in names_to_check
+                    if n
+                ]
 
                 custom_role = None
-                for key, value in CUSTOM_DISPLAY_ROLES.items():
-                    if key.lower() in possible_names:
-                        custom_role = value
+
+                for n in names_lower:
+                    if n in CUSTOM_DISPLAY_ROLES:
+                        custom_role = CUSTOM_DISPLAY_ROLES[n]
                         break
 
-                staff_role = None
+                staff_roles = [
+                    role for role in member.roles
+                    if role.name.lower() in STAFF_ROLE_NAMES
+                ]
 
-                # Find highest matching staff role
-                for role in sorted(member.roles, key=lambda r: r.position, reverse=True):
-                    role_name_lower = role.name.lower()
-
-                    if role_name_lower in STAFF_ROLE_NAMES:
-                        staff_role = role
-                        break
-
-                if not custom_role and not staff_role:
+                if not custom_role and not staff_roles:
                     continue
 
                 if custom_role:
                     display_role = custom_role
                 else:
-                    display_role = staff_role.name
+                    top_staff_role = max(staff_roles, key=lambda r: r.position)
+                    display_role = top_staff_role.name
 
-                role_key = display_role.lower()
+                colored_roles = [
+                    role for role in member.roles
+                    if role.color and role.color.value != 0
+                ]
 
-                role_color = FALLBACK_ROLE_COLORS.get(role_key, "#ffffff")
-
-                if staff_role and staff_role.color and staff_role.color.value != 0:
-                    role_color = str(staff_role.color)
-
-                # Force fallbacks for custom roles if no actual role color exists
-                if custom_role and role_color == "#ffffff":
-                    role_color = FALLBACK_ROLE_COLORS.get(role_key, "#ffffff")
+                if colored_roles:
+                    color_role = max(colored_roles, key=lambda r: r.position)
+                    role_color = str(color_role.color)
+                else:
+                    role_color = FALLBACK_ROLE_COLORS.get(display_role, "#ffffff")
 
                 avatar_url = None
                 try:
                     avatar_url = member.display_avatar.url
                 except Exception:
-                    avatar_url = ""
+                    avatar_url = None
 
-                staff.append({
-                    "id": str(member.id),
-                    "username": member.name,
-                    "display_name": member.display_name,
-                    "role": display_role,
-                    "role_color": role_color,
-                    "avatar": avatar_url,
-                    "highlighted": role_key in {"owner", "dev"},
-                })
+                staff.append(
+                    {
+                        "id": str(member.id),
+                        "username": member.name,
+                        "display_name": member.display_name,
+                        "role": display_role,
+                        "role_color": role_color,
+                        "avatar": avatar_url,
+                        "highlighted": display_role.lower() in ["owner", "dev"],
+                    }
+                )
 
             role_order = {
-                "owner": 0,
-                "dev": 1,
-                "admin": 2,
-                "administrator": 2,
-                "moderator": 3,
-                "mod": 3,
-                "helper": 4,
-                "staff": 5,
+                "owner": 1,
+                "dev": 2,
+                "admin": 3,
+                "administrator": 3,
+                "moderator": 4,
+                "mod": 4,
+                "helper": 5,
+                "staff": 6,
             }
 
             staff.sort(
                 key=lambda x: (
-                    role_order.get(str(x.get("role", "")).lower(), 99),
-                    str(x.get("display_name", "")).lower(),
+                    role_order.get(x["role"].lower(), 99),
+                    x["display_name"].lower(),
                 )
             )
 
-            resp = web.json_response({
-                "ok": True,
-                "staff": staff
-            })
+            resp = web.json_response(
+                {
+                    "ok": True,
+                    "staff": staff,
+                    "count": len(staff),
+                }
+            )
             resp.headers["Access-Control-Allow-Origin"] = "*"
             return resp
 
         except Exception as e:
-            print("Error in /staff handler:")
+            print("Staff handler error:")
             traceback.print_exc()
 
-            resp = web.json_response({
-                "ok": False,
-                "error": str(e),
-                "staff": []
-            }, status=500)
+            resp = web.json_response(
+                {
+                    "ok": False,
+                    "error": str(e),
+                    "staff": [],
+                },
+                status=500,
+            )
             resp.headers["Access-Control-Allow-Origin"] = "*"
             return resp
 
@@ -7812,9 +7815,9 @@ async def start_web_api():
     app.router.add_get("/rules", rules_handler)
     app.router.add_get("/standings", standings_handler)
     app.router.add_get("/staff", staff_handler)
-
     app.router.add_post("/report_score", report_score_handler)
     app.router.add_post("/create_broadcast", create_broadcast_handler)
+
 
     # CORS OPTIONS
     app.router.add_route("OPTIONS", "/member_count", options_handler)
@@ -7843,6 +7846,7 @@ async def start_web_api():
         f"(/member_count, /teams, /rules, /standings, /staff, /report_score, /create_broadcast, "
         f"/auth/discord/login, /auth/discord/callback, /auth/me)"
     )
+
 
 
 
