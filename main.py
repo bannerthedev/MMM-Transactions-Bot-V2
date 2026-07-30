@@ -7602,7 +7602,7 @@ async def start_web_api():
             )
             return add_cors(resp)
 
-    # /staff
+    # ---------- /staff ----------
     async def staff_handler(request: web.Request):
         try:
             guild = bot.get_guild(TEST_GUILD_ID)
@@ -7613,11 +7613,11 @@ async def start_web_api():
                         "ok": False,
                         "error": "guild_not_found",
                         "staff": [],
+                        "count": 0,
                     },
                     status=404,
                 )
-                resp.headers["Access-Control-Allow-Origin"] = "*"
-                return resp
+                return add_cors(resp)
 
             staff = []
 
@@ -7629,8 +7629,11 @@ async def start_web_api():
             FALLBACK_ROLE_COLORS = {
                 "owner": "#facc15",
                 "dev": "#3b82f6",
+                "developer": "#3b82f6",
                 "admin": "#ef4444",
+                "administrator": "#ef4444",
                 "moderator": "#22c55e",
+                "mod": "#22c55e",
                 "helper": "#a855f7",
                 "staff": "#f97316",
             }
@@ -7662,7 +7665,24 @@ async def start_web_api():
 
                 return names
 
-            for member in guild.members:
+            # Try to make sure member cache is filled
+            try:
+                await guild.chunk(cache=True)
+            except Exception:
+                pass
+
+            members = list(guild.members)
+
+            # Fallback if cache is still weak
+            if not members:
+                try:
+                    members = [m async for m in guild.fetch_members(limit=None)]
+                except Exception:
+                    members = []
+
+            print(f"/staff checking {len(members)} members")
+
+            for member in members:
                 if member.bot:
                     continue
 
@@ -7699,7 +7719,6 @@ async def start_web_api():
                         "#facc15",
                     )
 
-                avatar_url = None
                 try:
                     avatar_url = member.display_avatar.url
                 except Exception:
@@ -7743,23 +7762,22 @@ async def start_web_api():
                     "count": len(staff),
                 }
             )
-            resp.headers["Access-Control-Allow-Origin"] = "*"
-            return resp
+            return add_cors(resp)
 
-        except Exception:
+        except Exception as e:
             print("Failed in /staff handler:")
             traceback.print_exc()
 
             resp = web.json_response(
                 {
                     "ok": False,
-                    "error": "staff_handler_failed",
+                    "error": str(e),
                     "staff": [],
+                    "count": 0,
                 },
                 status=500,
             )
-            resp.headers["Access-Control-Allow-Origin"] = "*"
-            return resp
+            return add_cors(resp)
 
     # ---------- Placeholder POST handlers if you already use these ----------
     async def report_score_handler(request: web.Request):
@@ -7838,8 +7856,11 @@ async def start_web_api():
     runner = web.AppRunner(app)
     await runner.setup()
 
+    bot._web_runner = runner
+
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
+
 
     print(
         f"Web API running on port {port} "
