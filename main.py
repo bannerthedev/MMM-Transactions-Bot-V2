@@ -7608,40 +7608,28 @@ async def start_web_api():
             guild = bot.get_guild(TEST_GUILD_ID)
 
             if guild is None:
-                resp = web.json_response(
-                    {
-                        "ok": False,
-                        "error": "guild_not_found",
-                        "staff": [],
-                        "count": 0,
-                    },
-                    status=404,
-                )
-                return add_cors(resp)
+                resp = web.json_response({
+                    "ok": False,
+                    "error": "guild_not_found",
+                    "staff": []
+                }, status=404)
+                resp.headers["Access-Control-Allow-Origin"] = "*"
+                return resp
 
-            staff = []
+            # Try to make sure members are loaded
+            try:
+                await guild.chunk(cache=True)
+            except Exception:
+                pass
 
             CUSTOM_DISPLAY_ROLES = {
                 "banner1234": "Dev",
                 "mmm.compsova": "OWNER",
             }
 
-            FALLBACK_ROLE_COLORS = {
-                "owner": "#facc15",
-                "dev": "#3b82f6",
-                "developer": "#3b82f6",
-                "admin": "#ef4444",
-                "administrator": "#ef4444",
-                "moderator": "#22c55e",
-                "mod": "#22c55e",
-                "helper": "#a855f7",
-                "staff": "#f97316",
-            }
-
             STAFF_ROLE_NAMES = {
                 "owner",
                 "dev",
-                "developer",
                 "admin",
                 "administrator",
                 "moderator",
@@ -7650,96 +7638,89 @@ async def start_web_api():
                 "staff",
             }
 
-            def normalize_name(value):
-                return str(value or "").strip().lower()
+            FALLBACK_ROLE_COLORS = {
+                "owner": "#facc15",
+                "dev": "#3b82f6",
+                "admin": "#ef4444",
+                "administrator": "#ef4444",
+                "moderator": "#22c55e",
+                "mod": "#22c55e",
+                "helper": "#a855f7",
+                "staff": "#ffffff",
+            }
 
-            def get_member_names(member):
-                names = {
-                    normalize_name(member.name),
-                    normalize_name(member.display_name),
-                }
-
-                global_name = getattr(member, "global_name", None)
-                if global_name:
-                    names.add(normalize_name(global_name))
-
-                return names
-
-            # Try to make sure member cache is filled
-            try:
-                await guild.chunk(cache=True)
-            except Exception:
-                pass
+            staff = []
 
             members = list(guild.members)
 
-            # Fallback if cache is still weak
-            if not members:
+            # Fallback fetch if member cache is empty/incomplete
+            if len(members) <= 1:
                 try:
                     members = [m async for m in guild.fetch_members(limit=None)]
                 except Exception:
-                    members = []
-
-            print(f"/staff checking {len(members)} members")
+                    pass
 
             for member in members:
-                if member.bot:
-                    continue
+                username = (member.name or "").lower()
+                display_name = (member.display_name or "").lower()
+                global_name = (getattr(member, "global_name", None) or "").lower()
 
-                member_names = get_member_names(member)
+                possible_names = {username, display_name, global_name}
 
                 custom_role = None
-                for username_key, display_role in CUSTOM_DISPLAY_ROLES.items():
-                    if normalize_name(username_key) in member_names:
-                        custom_role = display_role
+                for key, value in CUSTOM_DISPLAY_ROLES.items():
+                    if key.lower() in possible_names:
+                        custom_role = value
                         break
 
-                matched_staff_role = None
+                staff_role = None
 
+                # Find highest matching staff role
                 for role in sorted(member.roles, key=lambda r: r.position, reverse=True):
-                    role_name_normalized = normalize_name(role.name)
+                    role_name_lower = role.name.lower()
 
-                    if role_name_normalized in STAFF_ROLE_NAMES:
-                        matched_staff_role = role
+                    if role_name_lower in STAFF_ROLE_NAMES:
+                        staff_role = role
                         break
 
-                if not custom_role and not matched_staff_role:
+                if not custom_role and not staff_role:
                     continue
 
-                display_role_name = custom_role or matched_staff_role.name
+                if custom_role:
+                    display_role = custom_role
+                else:
+                    display_role = staff_role.name
 
-                role_color = None
+                role_key = display_role.lower()
 
-                if matched_staff_role and matched_staff_role.color and matched_staff_role.color.value != 0:
-                    role_color = str(matched_staff_role.color)
+                role_color = FALLBACK_ROLE_COLORS.get(role_key, "#ffffff")
 
-                if not role_color:
-                    role_color = FALLBACK_ROLE_COLORS.get(
-                        normalize_name(display_role_name),
-                        "#facc15",
-                    )
+                if staff_role and staff_role.color and staff_role.color.value != 0:
+                    role_color = str(staff_role.color)
 
+                # Force fallbacks for custom roles if no actual role color exists
+                if custom_role and role_color == "#ffffff":
+                    role_color = FALLBACK_ROLE_COLORS.get(role_key, "#ffffff")
+
+                avatar_url = None
                 try:
                     avatar_url = member.display_avatar.url
                 except Exception:
-                    avatar_url = None
+                    avatar_url = ""
 
-                staff.append(
-                    {
-                        "id": str(member.id),
-                        "username": member.name,
-                        "display_name": member.display_name,
-                        "role": display_role_name,
-                        "role_color": role_color,
-                        "avatar": avatar_url,
-                        "highlighted": normalize_name(display_role_name) in {"owner", "dev"},
-                    }
-                )
+                staff.append({
+                    "id": str(member.id),
+                    "username": member.name,
+                    "display_name": member.display_name,
+                    "role": display_role,
+                    "role_color": role_color,
+                    "avatar": avatar_url,
+                    "highlighted": role_key in {"owner", "dev"},
+                })
 
             role_order = {
                 "owner": 0,
                 "dev": 1,
-                "developer": 1,
                 "admin": 2,
                 "administrator": 2,
                 "moderator": 3,
@@ -7750,34 +7731,29 @@ async def start_web_api():
 
             staff.sort(
                 key=lambda x: (
-                    role_order.get(normalize_name(x.get("role")), 99),
-                    normalize_name(x.get("display_name")),
+                    role_order.get(str(x.get("role", "")).lower(), 99),
+                    str(x.get("display_name", "")).lower(),
                 )
             )
 
-            resp = web.json_response(
-                {
-                    "ok": True,
-                    "staff": staff,
-                    "count": len(staff),
-                }
-            )
-            return add_cors(resp)
+            resp = web.json_response({
+                "ok": True,
+                "staff": staff
+            })
+            resp.headers["Access-Control-Allow-Origin"] = "*"
+            return resp
 
         except Exception as e:
-            print("Failed in /staff handler:")
+            print("Error in /staff handler:")
             traceback.print_exc()
 
-            resp = web.json_response(
-                {
-                    "ok": False,
-                    "error": str(e),
-                    "staff": [],
-                    "count": 0,
-                },
-                status=500,
-            )
-            return add_cors(resp)
+            resp = web.json_response({
+                "ok": False,
+                "error": str(e),
+                "staff": []
+            }, status=500)
+            resp.headers["Access-Control-Allow-Origin"] = "*"
+            return resp
 
     # ---------- Placeholder POST handlers if you already use these ----------
     async def report_score_handler(request: web.Request):
