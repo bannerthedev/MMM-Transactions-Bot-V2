@@ -7337,7 +7337,7 @@ async def auth_me(request: web.Request):
 
 
 
-GOOGLE_DOC_ID = "15C61xZ9CJOYD94Mk4JSTBb0O3nSXR6u_KIQEIHxbuE8"
+GOOGLE_DOC_ID = "1B6INe0kumto8kq2aN8eMxyvtPLDqRwWZovhNvXDqnhU"
 DOC_EXPORT_URL = f"https://docs.google.com/document/d/{GOOGLE_DOC_ID}/export?format=html"
 
 def _build_id_from_title(title: str) -> str:
@@ -7649,30 +7649,44 @@ async def start_web_api():
             return resp
 
     # ---------- /rules ----------
-    async def rules_handler(request: web.Request):
-        try:
-            # Keep this simple unless you already have rules data somewhere else.
-            resp = web.json_response(
-                {
-                    "ok": True,
-                    "rules": [],
-                }
-            )
-            return add_cors(resp)
+async def rules_handler(request: web.Request):
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(DOC_EXPORT_URL) as resp:
+                text = await resp.text()
 
-        except Exception as e:
-            print("Error in /rules:")
-            traceback.print_exc()
+                if resp.status != 200:
+                    response = web.json_response(
+                        {
+                            "ok": False,
+                            "error": "failed_to_fetch_google_doc",
+                            "status": resp.status,
+                            "preview": text[:500],
+                        },
+                        status=500,
+                    )
+                    response.headers["Access-Control-Allow-Origin"] = "*"
+                    return response
 
-            resp = web.json_response(
-                {
-                    "ok": False,
-                    "error": str(e),
-                    "rules": [],
-                },
-                status=500,
-            )
-            return add_cors(resp)
+        response = web.json_response(
+            {
+                "ok": True,
+                "html": text,
+            }
+        )
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        return response
+
+    except Exception as e:
+        response = web.json_response(
+            {
+                "ok": False,
+                "error": str(e),
+            },
+            status=500,
+        )
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        return response
 
     # ---------- /standings ----------
     async def standings_handler(request: web.Request):
