@@ -7394,6 +7394,80 @@ def _parse_doc_sections(html_text: str):
         sections = [{"id": "rules-all", "title": "Rules", "html": str(body)}]
     return sections
 
+
+
+
+
+def slugify_rule_title(title: str) -> str:
+    title = title.lower().strip()
+    title = re.sub(r"[^a-z0-9]+", "-", title)
+    title = title.strip("-")
+    return title or "section"
+
+
+def parse_rules_from_google_doc_html(doc_html: str):
+    soup = BeautifulSoup(doc_html, "html.parser")
+
+    body = soup.body or soup
+
+    sections = []
+    current_section = None
+    current_html_parts = []
+
+    def save_current_section():
+        nonlocal current_section, current_html_parts
+
+        if current_section:
+            current_section["html"] = "\n".join(current_html_parts).strip()
+            sections.append(current_section)
+
+        current_section = None
+        current_html_parts = []
+
+    for tag in body.find_all(["h1", "h2", "h3", "p", "ul", "ol", "table"]):
+        text = tag.get_text(" ", strip=True)
+
+        if not text:
+            continue
+
+        # Treat Google Doc headings as rule tabs
+        if tag.name in ["h1", "h2", "h3"]:
+            save_current_section()
+
+            title = text
+            section_id = slugify_rule_title(title)
+
+            # Make IDs unique
+            existing_ids = {s["id"] for s in sections}
+            base_id = section_id
+            n = 2
+            while section_id in existing_ids:
+                section_id = f"{base_id}-{n}"
+                n += 1
+
+            current_section = {
+                "id": section_id,
+                "title": title,
+                "html": "",
+            }
+
+        else:
+            if current_section is None:
+                current_section = {
+                    "id": "rules",
+                    "title": "Rules",
+                    "html": "",
+                }
+
+            current_html_parts.append(str(tag))
+
+    save_current_section()
+
+    return sections
+
+
+
+
 async def _fetch_doc_html(session: aiohttp.ClientSession):
     headers = {
         "User-Agent": (
@@ -7649,44 +7723,50 @@ async def start_web_api():
             return resp
 
     # ---------- /rules ----------
-async def rules_handler(request: web.Request):
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(DOC_EXPORT_URL) as resp:
-                text = await resp.text()
+    async def rules_handler(request: web.Request):
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(DOC_EXPORT_URL, timeout=20) as resp:
+                    if resp.status != 200:
+                        text = await resp.text()
+                        print("Google Doc fetch failed:", resp.status, text[:500])
 
-                if resp.status != 200:
-                    response = web.json_response(
-                        {
-                            "ok": False,
-                            "error": "failed_to_fetch_google_doc",
-                            "status": resp.status,
-                            "preview": text[:500],
-                        },
-                        status=500,
-                    )
-                    response.headers["Access-Control-Allow-Origin"] = "*"
-                    return response
+                        response = web.json_response(
+                            {
+                                "error": f"google_doc_fetch_failed_{resp.status}",
+                                "sections": [],
+                            },
+                            status=500,
+                        )
+                        response.headers["Access-Control-Allow-Origin"] = "*"
+                        return response
 
-        response = web.json_response(
-            {
-                "ok": True,
-                "html": text,
-            }
-        )
-        response.headers["Access-Control-Allow-Origin"] = "*"
-        return response
+                    doc_html = await resp.text()
 
-    except Exception as e:
-        response = web.json_response(
-            {
-                "ok": False,
-                "error": str(e),
-            },
-            status=500,
-        )
-        response.headers["Access-Control-Allow-Origin"] = "*"
-        return response
+            sections = parse_rules_from_google_doc_html(doc_html)
+
+            response = web.json_response(
+                {
+                    "ok": True,
+                    "sections": sections,
+                    "count": len(sections),
+                }
+            )
+            response.headers["Access-Control-Allow-Origin"] = "*"
+            return response
+
+        except Exception as e:
+            print("Rules handler error:", repr(e))
+
+            response = web.json_response(
+                {
+                    "error": str(e),
+                    "sections": [],
+                },
+                status=500,
+            )
+            response.headers["Access-Control-Allow-Origin"] = "*"
+            return response
 
     # ---------- /standings ----------
     async def standings_handler(request: web.Request):
