@@ -7500,15 +7500,64 @@ async def start_web_api():
                 resp.headers["Access-Control-Allow-Origin"] = "*"
                 return resp
 
-            TEAM_DIVIDER_ROLE_ID = 1522469514908795032
+            # These must match your Discord role names exactly or close to exactly
+            TOP_MARKER_NAMES = {
+                "team player",
+                "team players",
+            }
 
-            divider_role = guild.get_role(TEAM_DIVIDER_ROLE_ID)
+            BOTTOM_MARKER_NAMES = {
+                "team roles",
+                "——————team roles——————",
+                "————————team roles————————",
+                "----------------team roles----------------",
+                "--------team roles--------",
+            }
 
-            if divider_role is None:
+            def clean_role_name(name: str) -> str:
+                return (
+                    name.lower()
+                    .replace("—", "-")
+                    .replace("–", "-")
+                    .replace("_", " ")
+                    .strip()
+                )
+
+            roles = list(guild.roles)
+
+            top_marker = None
+            bottom_marker = None
+
+            for role in roles:
+                cleaned = clean_role_name(role.name)
+
+                if cleaned in TOP_MARKER_NAMES:
+                    top_marker = role
+
+                # More flexible check for divider role
+                if cleaned in BOTTOM_MARKER_NAMES or "team roles" in cleaned:
+                    bottom_marker = role
+
+            if top_marker is None:
                 resp = web.json_response(
                     {
                         "ok": False,
-                        "error": "team_divider_role_not_found",
+                        "error": "top_marker_not_found",
+                        "message": "Could not find the Team Player role.",
+                        "teams": [],
+                        "count": 0,
+                    },
+                    status=404,
+                )
+                resp.headers["Access-Control-Allow-Origin"] = "*"
+                return resp
+
+            if bottom_marker is None:
+                resp = web.json_response(
+                    {
+                        "ok": False,
+                        "error": "bottom_marker_not_found",
+                        "message": "Could not find the Team Roles divider role.",
                         "teams": [],
                         "count": 0,
                     },
@@ -7519,51 +7568,78 @@ async def start_web_api():
 
             teams = []
 
-            for role in guild.roles:
-                if role.id == TEAM_DIVIDER_ROLE_ID:
-                    continue
-
+            for role in roles:
+                # Skip managed/bot/integration roles
                 if role.managed:
                     continue
 
-                if role.name == "@everyone":
+                # Skip @everyone
+                if role.is_default():
                     continue
 
-                # Team roles are usually below the divider role.
-                # If yours are above instead, change < to >.
-                if role.position < divider_role.position:
-                    member_count = len(role.members)
+                # Only include roles BETWEEN Team Player and Team Roles divider
+                lower = min(top_marker.position, bottom_marker.position)
+                upper = max(top_marker.position, bottom_marker.position)
 
-                    teams.append(
-                        {
-                            "id": str(role.id),
-                            "name": role.name,
-                            "member_count": member_count,
-                            "color_hex": f"#{role.color.value:06x}" if role.color.value else "#facc15",
-                            "position": role.position,
-                        }
-                    )
+                if not (lower < role.position < upper):
+                    continue
 
-            teams.sort(key=lambda t: t["name"].lower())
+                # Skip the marker roles themselves just in case
+                if role.id in {top_marker.id, bottom_marker.id}:
+                    continue
+
+                # Optional: skip empty team roles
+                # Remove this if you want teams to show even with 0 members
+                # if len(role.members) == 0:
+                #     continue
+
+                color = "#5865F2"
+                try:
+                    if role.color and role.color.value != 0:
+                        color = str(role.color)
+                except Exception:
+                    pass
+
+                teams.append(
+                    {
+                        "id": role.id,
+                        "name": role.name,
+                        "color": color,
+                        "member_count": len(role.members),
+                        "position": role.position,
+                    }
+                )
+
+            # Sort by role position, top to bottom
+            teams.sort(key=lambda t: t["position"], reverse=True)
 
             resp = web.json_response(
                 {
                     "ok": True,
                     "teams": teams,
                     "count": len(teams),
+                    "top_marker": {
+                        "name": top_marker.name,
+                        "position": top_marker.position,
+                    },
+                    "bottom_marker": {
+                        "name": bottom_marker.name,
+                        "position": bottom_marker.position,
+                    },
                 }
             )
             resp.headers["Access-Control-Allow-Origin"] = "*"
             return resp
 
         except Exception as e:
-            print("Error in /teams handler:", repr(e))
+            print("teams_handler error:", repr(e))
             traceback.print_exc()
 
             resp = web.json_response(
                 {
                     "ok": False,
-                    "error": str(e),
+                    "error": "internal_error",
+                    "message": str(e),
                     "teams": [],
                     "count": 0,
                 },
