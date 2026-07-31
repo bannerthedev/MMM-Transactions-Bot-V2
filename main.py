@@ -97,6 +97,29 @@ BRACKET_OUTPUT_IMAGE_PATH = "MMM_BRACKET_FILLED.png"
 YOUTUBE_THUMB_URL = "https://cdn.discordapp.com/attachments/1457550168395223232/1508602624365297715/MONKE_MONKE_MONKE.png"
 
 
+
+EXECUTIVE_ROLE_NAME = "Team-Executive"
+
+NON_TEAM_ROLE_NAMES = {
+    "@everyone",
+    "Executive",
+    "Admin",
+    "Administrator",
+    "Moderator",
+    "Mod",
+    "Staff",
+    "Owner",
+    "Captain",
+    "Co-Captain",
+    "Co Captain",
+    "Bot",
+    "Bots",
+    "Muted",
+    "Verified",
+}
+
+
+
 ROSTER_LOCKED = False
 SEEDING_OPEN = False
 FORCE_WARN_DAYS = 4
@@ -7466,6 +7489,60 @@ def parse_rules_from_google_doc_html(doc_html: str):
     return sections
 
 
+def _role_icon_url(role: discord.Role):
+    """
+    Gets the Discord role icon URL if the role has one.
+    This is used as the automatic team logo.
+    """
+    try:
+        if getattr(role, "display_icon", None):
+            return role.display_icon.url
+    except Exception:
+        pass
+
+    return None
+
+
+def _member_avatar_url(member: discord.Member):
+    """
+    Gets the member's Discord avatar/PFP.
+    """
+    try:
+        return member.display_avatar.url
+    except Exception:
+        return None
+
+
+def _is_probably_team_role(role: discord.Role):
+    """
+    Decides whether a Discord role should count as a team role.
+    """
+    if role is None:
+        return False
+
+    if role.name in NON_TEAM_ROLE_NAMES:
+        return False
+
+    if role.managed:
+        return False
+
+    if role.is_default():
+        return False
+
+    return True
+
+
+def _member_payload(member: discord.Member):
+    """
+    Converts a Discord member into website-safe JSON.
+    """
+    return {
+        "id": str(member.id),
+        "name": member.display_name,
+        "username": member.name,
+        "avatar": _member_avatar_url(member),
+    }
+
 
 
 async def _fetch_doc_html(session: aiohttp.ClientSession):
@@ -7567,155 +7644,89 @@ async def start_web_api():
                         "ok": False,
                         "error": "guild_not_found",
                         "teams": [],
-                        "count": 0,
+                        "executives": [],
                     },
                     status=404,
                 )
                 resp.headers["Access-Control-Allow-Origin"] = "*"
                 return resp
 
-            # These must match your Discord role names exactly or close to exactly
-            TOP_MARKER_NAMES = {
-                "team player",
-                "team players",
-            }
+            # Make sure members are loaded/cacheable
+            try:
+                await guild.chunk(cache=True)
+            except Exception as e:
+                print("Warning: guild.chunk failed:", repr(e))
 
-            BOTTOM_MARKER_NAMES = {
-                "team roles",
-                "——————team roles——————",
-                "————————team roles————————",
-                "----------------team roles----------------",
-                "--------team roles--------",
-            }
+            executive_role = discord.utils.get(guild.roles, name=EXECUTIVE_ROLE_NAME)
 
-            def clean_role_name(name: str) -> str:
-                return (
-                    name.lower()
-                    .replace("—", "-")
-                    .replace("–", "-")
-                    .replace("_", " ")
-                    .strip()
-                )
-
-            roles = list(guild.roles)
-
-            top_marker = None
-            bottom_marker = None
-
-            for role in roles:
-                cleaned = clean_role_name(role.name)
-
-                if cleaned in TOP_MARKER_NAMES:
-                    top_marker = role
-
-                # More flexible check for divider role
-                if cleaned in BOTTOM_MARKER_NAMES or "team roles" in cleaned:
-                    bottom_marker = role
-
-            if top_marker is None:
-                resp = web.json_response(
-                    {
-                        "ok": False,
-                        "error": "top_marker_not_found",
-                        "message": "Could not find the Team Player role.",
-                        "teams": [],
-                        "count": 0,
-                    },
-                    status=404,
-                )
-                resp.headers["Access-Control-Allow-Origin"] = "*"
-                return resp
-
-            if bottom_marker is None:
-                resp = web.json_response(
-                    {
-                        "ok": False,
-                        "error": "bottom_marker_not_found",
-                        "message": "Could not find the Team Roles divider role.",
-                        "teams": [],
-                        "count": 0,
-                    },
-                    status=404,
-                )
-                resp.headers["Access-Control-Allow-Origin"] = "*"
-                return resp
+            executives = []
+            if executive_role:
+                executives = [
+                    _member_payload(member)
+                    for member in guild.members
+                    if executive_role in member.roles
+                ]
 
             teams = []
 
-            for role in roles:
-                # Skip managed/bot/integration roles
-                if role.managed:
+            for role in guild.roles:
+                if not _is_probably_team_role(role):
                     continue
 
-                # Skip @everyone
-                if role.is_default():
+                # Skip the Executive role specifically
+                if role.name == EXECUTIVE_ROLE_NAME:
                     continue
 
-                # Only include roles BETWEEN Team Player and Team Roles divider
-                lower = min(top_marker.position, bottom_marker.position)
-                upper = max(top_marker.position, bottom_marker.position)
+                members = [
+                    member
+                    for member in guild.members
+                    if role in member.roles and not member.bot
+                ]
 
-                if not (lower < role.position < upper):
+                if not members:
                     continue
 
-                # Skip the marker roles themselves just in case
-                if role.id in {top_marker.id, bottom_marker.id}:
-                    continue
-
-                # Optional: skip empty team roles
-                # Remove this if you want teams to show even with 0 members
-                # if len(role.members) == 0:
-                #     continue
-
-                color = "#5865F2"
-                try:
-                    if role.color and role.color.value != 0:
-                        color = str(role.color)
-                except Exception:
-                    pass
+                players = [_member_payload(member) for member in members]
 
                 teams.append(
                     {
-                        "id": role.id,
+                        "id": str(role.id),
                         "name": role.name,
-                        "color": color,
-                        "member_count": len(role.members),
-                        "position": role.position,
+                        "color": str(role.color),
+                        "logo": _role_icon_url(role),
+                        "players": players,
+                        "captains": [],
+                        "co_captains": [],
                     }
                 )
 
-            # Sort by role position, top to bottom
-            teams.sort(key=lambda t: t["position"], reverse=True)
+            # Sort teams by Discord role position, highest first
+            teams.sort(
+                key=lambda team: discord.utils.get(guild.roles, id=int(team["id"])).position,
+                reverse=True,
+            )
 
             resp = web.json_response(
                 {
                     "ok": True,
                     "teams": teams,
-                    "count": len(teams),
-                    "top_marker": {
-                        "name": top_marker.name,
-                        "position": top_marker.position,
-                    },
-                    "bottom_marker": {
-                        "name": bottom_marker.name,
-                        "position": bottom_marker.position,
-                    },
+                    "executives": executives,
                 }
             )
             resp.headers["Access-Control-Allow-Origin"] = "*"
             return resp
 
         except Exception as e:
-            print("teams_handler error:", repr(e))
+            print("Failed to build teams response:", repr(e))
             traceback.print_exc()
 
             resp = web.json_response(
                 {
                     "ok": False,
-                    "error": "internal_error",
-                    "message": str(e),
+                    "error": "teams_failed",
+                    "details": str(e),
                     "teams": [],
-                    "count": 0,
+                    "executives": [],
                 },
                 status=500,
             )
