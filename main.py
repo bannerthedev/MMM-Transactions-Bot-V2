@@ -7481,25 +7481,70 @@ async def start_web_api():
                 status=500,
             )
             return add_cors(resp)
-
-    # ---------- /teams ----------
+        
+    # /teams
     async def teams_handler(request: web.Request):
         try:
+            guild = bot.get_guild(TEST_GUILD_ID)
+
+            if guild is None:
+                resp = web.json_response(
+                    {
+                        "ok": False,
+                        "error": "guild_not_found",
+                        "teams": [],
+                        "count": 0,
+                    },
+                    status=404,
+                )
+                resp.headers["Access-Control-Allow-Origin"] = "*"
+                return resp
+
+            TEAM_DIVIDER_ROLE_ID = 1522469514908795032
+
+            divider_role = guild.get_role(TEAM_DIVIDER_ROLE_ID)
+
+            if divider_role is None:
+                resp = web.json_response(
+                    {
+                        "ok": False,
+                        "error": "team_divider_role_not_found",
+                        "teams": [],
+                        "count": 0,
+                    },
+                    status=404,
+                )
+                resp.headers["Access-Control-Allow-Origin"] = "*"
+                return resp
+
             teams = []
 
-            # If you already have your own teams system, keep your logic here.
-            # This fallback tries to use TEAM_DATA if your bot has it.
-            try:
-                if "TEAM_DATA" in globals() and isinstance(TEAM_DATA, dict):
-                    for name, data in TEAM_DATA.items():
-                        teams.append(
-                            {
-                                "name": name,
-                                "data": data,
-                            }
-                        )
-            except Exception:
-                pass
+            for role in guild.roles:
+                if role.id == TEAM_DIVIDER_ROLE_ID:
+                    continue
+
+                if role.managed:
+                    continue
+
+                if role.name == "@everyone":
+                    continue
+
+                # Team roles are usually below the divider role.
+                # If yours are above instead, change < to >.
+                if role.position < divider_role.position:
+                    member_count = len(role.members)
+
+                    teams.append(
+                        {
+                            "id": str(role.id),
+                            "name": role.name,
+                            "member_count": member_count,
+                            "color_hex": f"#{role.color.value:06x}" if role.color.value else "#facc15",
+                            "position": role.position,
+                        }
+                    )
+
+            teams.sort(key=lambda t: t["name"].lower())
 
             resp = web.json_response(
                 {
@@ -7508,10 +7553,11 @@ async def start_web_api():
                     "count": len(teams),
                 }
             )
-            return add_cors(resp)
+            resp.headers["Access-Control-Allow-Origin"] = "*"
+            return resp
 
         except Exception as e:
-            print("Error in /teams:")
+            print("Error in /teams handler:", repr(e))
             traceback.print_exc()
 
             resp = web.json_response(
@@ -7523,7 +7569,8 @@ async def start_web_api():
                 },
                 status=500,
             )
-            return add_cors(resp)
+            resp.headers["Access-Control-Allow-Origin"] = "*"
+            return resp
 
     # ---------- /rules ----------
     async def rules_handler(request: web.Request):
@@ -7629,7 +7676,7 @@ async def start_web_api():
                 "admin",
                 "administrator",
                 "moderator",
-                "mod",
+                "trial mod",
                 "helper",
                 "staff",
             }
