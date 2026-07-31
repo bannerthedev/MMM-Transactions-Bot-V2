@@ -7602,7 +7602,7 @@ async def start_web_api():
             )
             return add_cors(resp)
 
-    # /staff
+    # ---------- /staff ----------
     async def staff_handler(request: web.Request):
         try:
             guild = bot.get_guild(TEST_GUILD_ID)
@@ -7614,16 +7614,9 @@ async def start_web_api():
                         "error": "guild_not_found",
                         "staff": [],
                     },
-                    status=500,
+                    status=404,
                 )
-                resp.headers["Access-Control-Allow-Origin"] = "*"
-                return resp
-
-            # Make sure members are loaded
-            try:
-                await guild.chunk(cache=True)
-            except Exception:
-                pass
+                return add_cors(resp)
 
             CUSTOM_DISPLAY_ROLES = {
                 "banner1234": "Dev",
@@ -7645,10 +7638,18 @@ async def start_web_api():
                 "OWNER": "#facc15",
                 "Dev": "#3b82f6",
                 "Admin": "#ef4444",
+                "Administrator": "#ef4444",
                 "Moderator": "#22c55e",
+                "Mod": "#22c55e",
                 "Helper": "#a855f7",
                 "Staff": "#ffffff",
             }
+
+            # IMPORTANT:
+            # Do not use await guild.chunk(cache=True) here.
+            # It can make the website wait forever.
+            if not guild.members:
+                print("Warning: guild.members is empty. Enable Server Members Intent.")
 
             staff = []
 
@@ -7659,11 +7660,7 @@ async def start_web_api():
                     getattr(member, "global_name", None),
                 ]
 
-                names_lower = [
-                    str(n).lower()
-                    for n in names_to_check
-                    if n
-                ]
+                names_lower = [str(n).lower() for n in names_to_check if n]
 
                 custom_role = None
 
@@ -7686,6 +7683,7 @@ async def start_web_api():
                     top_staff_role = max(staff_roles, key=lambda r: r.position)
                     display_role = top_staff_role.name
 
+                # Use highest colored Discord role
                 colored_roles = [
                     role for role in member.roles
                     if role.color and role.color.value != 0
@@ -7697,7 +7695,6 @@ async def start_web_api():
                 else:
                     role_color = FALLBACK_ROLE_COLORS.get(display_role, "#ffffff")
 
-                avatar_url = None
                 try:
                     avatar_url = member.display_avatar.url
                 except Exception:
@@ -7740,8 +7737,7 @@ async def start_web_api():
                     "count": len(staff),
                 }
             )
-            resp.headers["Access-Control-Allow-Origin"] = "*"
-            return resp
+            return add_cors(resp)
 
         except Exception as e:
             print("Staff handler error:")
@@ -7755,8 +7751,7 @@ async def start_web_api():
                 },
                 status=500,
             )
-            resp.headers["Access-Control-Allow-Origin"] = "*"
-            return resp
+            return add_cors(resp)
 
     # ---------- Placeholder POST handlers if you already use these ----------
     async def report_score_handler(request: web.Request):
@@ -7928,6 +7923,18 @@ bot = MainBot()
 @bot.event
 async def on_ready():
     print(f"Logged in as {bot.user} (ID: {bot.user.id})")
+
+    guild = bot.get_guild(TEST_GUILD_ID)
+
+    if guild:
+        try:
+            print("Loading guild members once...")
+            await guild.chunk(cache=True)
+            print(f"Loaded members: {len(guild.members)}")
+        except Exception:
+            print("Failed to chunk guild members:")
+            traceback.print_exc()
+
     await _populate_initial_standings_cache()
 
 @bot.listen("on_message")
