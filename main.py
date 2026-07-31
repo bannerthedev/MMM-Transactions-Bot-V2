@@ -7724,9 +7724,42 @@ async def start_web_api():
                 status=500,
             )
             return add_cors(resp)
-
-    # ---------- /staff ----------
+        
+    # /staff
     async def staff_handler(request: web.Request):
+        STAFF_ROLE_ORDER = [
+            "owner",
+            "dev",
+            "admins",
+            "monke mods",
+            "trial mods",
+            "helper",
+        ]
+
+        STAFF_ROLE_DISPLAY = {
+            "owner": "OWNER",
+            "dev": "DEV",
+            "admins": "Admins",
+            "monke mods": "Monke Mods",
+            "trial mods": "Trial Mods",
+            "helper": "Helper",
+        }
+
+        FALLBACK_ROLE_COLORS = {
+            "owner": "#facc15",       # yellow
+            "dev": "#3b82f6",         # blue
+            "admins": "#ef4444",      # red
+            "monke mods": "#a855f7",  # purple
+            "trial mods": "#22c55e",  # green
+            "helper": "#14b8a6",      # teal
+        }
+
+        # Custom username overrides
+        CUSTOM_DISPLAY_ROLES = {
+            "banner1234": "DEV",
+            "mmm.compsova": "OWNER",
+        }
+
         try:
             guild = bot.get_guild(TEST_GUILD_ID)
 
@@ -7739,85 +7772,76 @@ async def start_web_api():
                     },
                     status=404,
                 )
-                return add_cors(resp)
-
-            CUSTOM_DISPLAY_ROLES = {
-                "banner1234": "Dev",
-                "mmm.compsova": "OWNER",
-            }
-
-            STAFF_ROLE_NAMES = {
-                "owner",
-                "dev",
-                "admin",
-                "administrator",
-                "moderator",
-                "trial mod",
-                "helper",
-                "staff",
-            }
-
-            FALLBACK_ROLE_COLORS = {
-                "OWNER": "#facc15",
-                "Dev": "#3b82f6",
-                "Admin": "#ef4444",
-                "Administrator": "#ef4444",
-                "Moderator": "#22c55e",
-                "Mod": "#22c55e",
-                "Helper": "#a855f7",
-                "Staff": "#ffffff",
-            }
-
-            # IMPORTANT:
-            # Do not use await guild.chunk(cache=True) here.
-            # It can make the website wait forever.
-            if not guild.members:
-                print("Warning: guild.members is empty. Enable Server Members Intent.")
+                resp.headers["Access-Control-Allow-Origin"] = "*"
+                return resp
 
             staff = []
 
             for member in guild.members:
-                names_to_check = [
-                    member.name,
-                    member.display_name,
-                    getattr(member, "global_name", None),
-                ]
-
-                names_lower = [str(n).lower() for n in names_to_check if n]
-
-                custom_role = None
-
-                for n in names_lower:
-                    if n in CUSTOM_DISPLAY_ROLES:
-                        custom_role = CUSTOM_DISPLAY_ROLES[n]
-                        break
-
-                staff_roles = [
-                    role for role in member.roles
-                    if role.name.lower() in STAFF_ROLE_NAMES
-                ]
-
-                if not custom_role and not staff_roles:
+                if member.bot:
                     continue
 
-                if custom_role:
-                    display_role = custom_role
-                else:
-                    top_staff_role = max(staff_roles, key=lambda r: r.position)
-                    display_role = top_staff_role.name
-
-                # Use highest colored Discord role
-                colored_roles = [
-                    role for role in member.roles
-                    if role.color and role.color.value != 0
+                member_names = [
+                    (member.name or "").lower(),
+                    (member.display_name or "").lower(),
+                    (getattr(member, "global_name", "") or "").lower(),
                 ]
 
-                if colored_roles:
-                    color_role = max(colored_roles, key=lambda r: r.position)
-                    role_color = str(color_role.color)
-                else:
-                    role_color = FALLBACK_ROLE_COLORS.get(display_role, "#ffffff")
+                display_role_name = None
+                role_color = None
+                role_sort_index = 999
 
+                # Check custom users first
+                custom_role = None
+                for name in member_names:
+                    if name in CUSTOM_DISPLAY_ROLES:
+                        custom_role = CUSTOM_DISPLAY_ROLES[name]
+                        break
+
+                if custom_role:
+                    custom_key = custom_role.lower()
+
+                    display_role_name = custom_role
+                    role_sort_index = STAFF_ROLE_ORDER.index(custom_key) if custom_key in STAFF_ROLE_ORDER else 999
+
+                    # Try to find matching Discord role color
+                    matching_role = None
+                    for role in member.roles:
+                        if role.name.lower() == custom_key:
+                            matching_role = role
+                            break
+
+                    if matching_role and matching_role.color and matching_role.color.value != 0:
+                        role_color = str(matching_role.color)
+                    else:
+                        role_color = FALLBACK_ROLE_COLORS.get(custom_key, "#facc15")
+
+                else:
+                    # Check Discord roles in desired order
+                    for role_key in STAFF_ROLE_ORDER:
+                        found_role = None
+
+                        for role in member.roles:
+                            if role.name.lower() == role_key:
+                                found_role = role
+                                break
+
+                        if found_role:
+                            display_role_name = STAFF_ROLE_DISPLAY[role_key]
+                            role_sort_index = STAFF_ROLE_ORDER.index(role_key)
+
+                            if found_role.color and found_role.color.value != 0:
+                                role_color = str(found_role.color)
+                            else:
+                                role_color = FALLBACK_ROLE_COLORS.get(role_key, "#facc15")
+
+                            break
+
+                # Skip people who do not have one of the staff roles
+                if not display_role_name:
+                    continue
+
+                avatar_url = None
                 try:
                     avatar_url = member.display_avatar.url
                 except Exception:
@@ -7828,30 +7852,18 @@ async def start_web_api():
                         "id": str(member.id),
                         "username": member.name,
                         "display_name": member.display_name,
-                        "role": display_role,
-                        "role_color": role_color,
+                        "role": display_role_name,
+                        "role_color": role_color or "#facc15",
                         "avatar": avatar_url,
-                        "highlighted": display_role.lower() in ["owner", "dev"],
+                        "highlighted": display_role_name.lower() in ["owner", "dev"],
+                        "sort": role_sort_index,
                     }
                 )
 
-            role_order = {
-                "owner": 1,
-                "dev": 2,
-                "admin": 3,
-                "administrator": 3,
-                "moderator": 4,
-                "mod": 4,
-                "helper": 5,
-                "staff": 6,
-            }
+            staff.sort(key=lambda x: (x["sort"], x["display_name"].lower()))
 
-            staff.sort(
-                key=lambda x: (
-                    role_order.get(x["role"].lower(), 99),
-                    x["display_name"].lower(),
-                )
-            )
+            for person in staff:
+                person.pop("sort", None)
 
             resp = web.json_response(
                 {
@@ -7860,10 +7872,10 @@ async def start_web_api():
                     "count": len(staff),
                 }
             )
-            return add_cors(resp)
+            resp.headers["Access-Control-Allow-Origin"] = "*"
+            return resp
 
         except Exception as e:
-            print("Staff handler error:")
             traceback.print_exc()
 
             resp = web.json_response(
@@ -7874,7 +7886,8 @@ async def start_web_api():
                 },
                 status=500,
             )
-            return add_cors(resp)
+            resp.headers["Access-Control-Allow-Origin"] = "*"
+            return resp
 
     # ---------- Placeholder POST handlers if you already use these ----------
     async def report_score_handler(request: web.Request):
