@@ -7650,14 +7650,10 @@ async def start_web_api():
                 )
                 return add_cors(resp)
 
-            # Main league roles
             executive_role = discord.utils.get(guild.roles, name="Executive")
             captain_role = discord.utils.get(guild.roles, name="Captain")
             co_captain_role = discord.utils.get(guild.roles, name="Co-Captain")
             team_player_role = discord.utils.get(guild.roles, name="Team Player")
-
-            # Marker for where team roles start/end
-            team_roles_marker = discord.utils.get(guild.roles, name="————————Team Roles————————")
 
             missing_roles = []
 
@@ -7673,16 +7669,13 @@ async def start_web_api():
             if team_player_role is None:
                 missing_roles.append("Team Player")
 
-            if team_roles_marker is None:
-                missing_roles.append("————————Team Roles————————")
-
             if missing_roles:
                 resp = web.json_response(
                     {
                         "ok": False,
                         "error": "missing_required_roles",
                         "missing_roles": missing_roles,
-                        "message": "One or more required Discord roles could not be found.",
+                        "message": "One or more required Discord roles could not be found. Role names must match exactly.",
                         "teams": [],
                         "executives": [],
                     },
@@ -7690,11 +7683,48 @@ async def start_web_api():
                 )
                 return add_cors(resp)
 
-            # Team roles are between Team Player and the Team Roles marker
-            lower_position = min(team_player_role.position, team_roles_marker.position)
-            upper_position = max(team_player_role.position, team_roles_marker.position)
+            ignored_role_names = {
+                "@everyone",
+                "Executive",
+                "Captain",
+                "Co-Captain",
+                "Team Player",
+                "Admin",
+                "Administrator",
+                "Moderator",
+                "Mod",
+                "Staff",
+                "Owner",
+                "Bot",
+                "Bots",
+            }
 
-            # Server-wide executives
+            def is_separator_role(role):
+                name = role.name.strip()
+                return (
+                    "——" in name
+                    or "---" in name
+                    or "Team Roles" in name
+                    or "Roles" == name
+                )
+
+            def is_team_role(role):
+                if role.name in ignored_role_names:
+                    return False
+
+                if is_separator_role(role):
+                    return False
+
+                if role.managed:
+                    return False
+
+                # Team roles should be below Team Player in your Discord role order.
+                # In discord.py, higher roles have larger position numbers.
+                if role.position >= team_player_role.position:
+                    return False
+
+                return True
+
             executives = [
                 _member_payload(member)
                 for member in guild.members
@@ -7704,18 +7734,7 @@ async def start_web_api():
             teams = []
 
             for role in guild.roles:
-                # Skip marker/main roles themselves
-                if role.id in [
-                    executive_role.id,
-                    captain_role.id,
-                    co_captain_role.id,
-                    team_player_role.id,
-                    team_roles_marker.id,
-                ]:
-                    continue
-
-                # Only include actual team roles
-                if not (lower_position < role.position < upper_position):
+                if not is_team_role(role):
                     continue
 
                 team_members = [
@@ -7724,7 +7743,6 @@ async def start_web_api():
                     if role in member.roles and not member.bot
                 ]
 
-                # If you want to show empty teams too, remove this block
                 if not team_members:
                     continue
 
@@ -7740,6 +7758,12 @@ async def start_web_api():
                     if co_captain_role in member.roles
                 ]
 
+                team_executives = [
+                    _member_payload(member)
+                    for member in team_members
+                    if executive_role in member.roles
+                ]
+
                 players = [
                     _member_payload(member)
                     for member in team_members
@@ -7749,12 +7773,6 @@ async def start_web_api():
                     and executive_role not in member.roles
                 ]
 
-                team_executives = [
-                    _member_payload(member)
-                    for member in team_members
-                    if executive_role in member.roles
-                ]
-
                 teams.append(
                     {
                         "id": str(role.id),
@@ -7762,15 +7780,15 @@ async def start_web_api():
                         "color": str(role.color),
                         "logo": _role_icon_url(role),
 
-                        # Single text values for your current teams.html
                         "captain": captains[0]["name"] if captains else None,
                         "co_captain": co_captains[0]["name"] if co_captains else None,
 
-                        # Full lists if you want to display profile pics later
                         "captains": captains,
                         "co_captains": co_captains,
                         "executives": team_executives,
                         "players": players,
+
+                        "member_count": len(team_members),
                     }
                 )
 
