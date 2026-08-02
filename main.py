@@ -7733,6 +7733,52 @@ async def start_web_api():
             resp.headers["Access-Control-Allow-Origin"] = "*"
             return resp
 
+
+    # ---------- /youtube-feed ----------
+    async def youtube_feed_handler(request: web.Request):
+        feed_url = "https://www.youtube.com/feeds/videos.xml?channel_id=UCgCMrgrneSsZP1AE0bG9B1w"
+
+        try:
+            headers = {
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/120.0.0.0 Safari/537.36"
+                )
+            }
+
+            async with aiohttp.ClientSession() as session:
+                async with session.get(feed_url, headers=headers, timeout=20) as resp:
+                    text = await resp.text()
+
+                    if resp.status != 200:
+                        response = web.Response(
+                            text="Failed to fetch YouTube feed",
+                            status=resp.status,
+                            content_type="text/plain",
+                        )
+                        return add_cors(response)
+
+            response = web.Response(
+                text=text,
+                status=200,
+                content_type="application/xml",
+            )
+            response.headers["Cache-Control"] = "public, max-age=300"
+            return add_cors(response)
+
+        except Exception as e:
+            print("Error in /youtube-feed:")
+            traceback.print_exc()
+
+            response = web.Response(
+                text=f"Server error loading YouTube feed: {e}",
+                status=500,
+                content_type="text/plain",
+            )
+            return add_cors(response)
+
+
     # ---------- /rules ----------
     async def rules_handler(request: web.Request):
         try:
@@ -8051,9 +8097,14 @@ async def start_web_api():
     app.router.add_get("/rules", rules_handler)
     app.router.add_get("/standings", standings_handler)
     app.router.add_get("/staff", staff_handler)
+    app.router.add_get("/youtube-feed", youtube_feed_handler)
+
+    app.router.add_get("/auth/discord/login", auth_login)
+    app.router.add_get("/auth/discord/callback", auth_callback)
+    app.router.add_get("/auth/me", auth_me)
+
     app.router.add_post("/report_score", report_score_handler)
     app.router.add_post("/create_broadcast", create_broadcast_handler)
-
 
     # CORS OPTIONS
     app.router.add_route("OPTIONS", "/member_count", options_handler)
@@ -8061,8 +8112,11 @@ async def start_web_api():
     app.router.add_route("OPTIONS", "/rules", options_handler)
     app.router.add_route("OPTIONS", "/standings", options_handler)
     app.router.add_route("OPTIONS", "/staff", options_handler)
+    app.router.add_route("OPTIONS", "/youtube-feed", options_handler)
     app.router.add_route("OPTIONS", "/report_score", options_handler)
     app.router.add_route("OPTIONS", "/create_broadcast", options_handler)
+    app.router.add_route("OPTIONS", "/auth/discord/login", options_handler)
+    app.router.add_route("OPTIONS", "/auth/discord/callback", options_handler)
     app.router.add_route("OPTIONS", "/auth/me", options_handler)
 
     # ---------- RAILWAY PORT FIX ----------
@@ -8076,12 +8130,14 @@ async def start_web_api():
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
 
-
     print(
         f"Web API running on port {port} "
-        f"(/member_count, /teams, /rules, /standings, /staff, /report_score, /create_broadcast, "
+        f"(/member_count, /teams, /rules, /standings, /staff, /youtube-feed, "
+        f"/report_score, /create_broadcast, "
         f"/auth/discord/login, /auth/discord/callback, /auth/me)"
     )
+
+
 
 
 
