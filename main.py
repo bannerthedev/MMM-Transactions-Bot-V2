@@ -7633,7 +7633,7 @@ async def start_web_api():
             )
             return add_cors(resp)
         
-    # /teams
+    # ---------- /teams ----------
     async def teams_handler(request: web.Request):
         try:
             guild = bot.get_guild(TEST_GUILD_ID)
@@ -7648,14 +7648,10 @@ async def start_web_api():
                     },
                     status=404,
                 )
-                resp.headers["Access-Control-Allow-Origin"] = "*"
-                return resp
+                return add_cors(resp)
 
-            # Make sure members are loaded/cacheable
-            try:
-                await guild.chunk(cache=True)
-            except Exception as e:
-                print("Warning: guild.chunk failed:", repr(e))
+            # DO NOT use await guild.chunk(cache=True) here.
+            # It can hang and cause Railway/browser 499 errors.
 
             executive_role = discord.utils.get(guild.roles, name=EXECUTIVE_ROLE_NAME)
 
@@ -7664,17 +7660,16 @@ async def start_web_api():
                 executives = [
                     _member_payload(member)
                     for member in guild.members
-                    if executive_role in member.roles
+                    if executive_role in member.roles and not member.bot
                 ]
 
             teams = []
 
             for role in guild.roles:
-                if not _is_probably_team_role(role):
+                if role.name == EXECUTIVE_ROLE_NAME:
                     continue
 
-                # Skip the Executive role specifically
-                if role.name == EXECUTIVE_ROLE_NAME:
+                if not _is_probably_team_role(role):
                     continue
 
                 members = [
@@ -7695,12 +7690,13 @@ async def start_web_api():
                         "color": str(role.color),
                         "logo": _role_icon_url(role),
                         "players": players,
+                        "captain": None,
+                        "co_captain": None,
                         "captains": [],
                         "co_captains": [],
                     }
                 )
 
-            # Sort teams by Discord role position, highest first
             teams.sort(
                 key=lambda team: discord.utils.get(guild.roles, id=int(team["id"])).position,
                 reverse=True,
@@ -7711,10 +7707,10 @@ async def start_web_api():
                     "ok": True,
                     "teams": teams,
                     "executives": executives,
+                    "count": len(teams),
                 }
             )
-            resp.headers["Access-Control-Allow-Origin"] = "*"
-            return resp
+            return add_cors(resp)
 
         except Exception as e:
             print("Failed to build teams response:", repr(e))
@@ -7730,8 +7726,7 @@ async def start_web_api():
                 },
                 status=500,
             )
-            resp.headers["Access-Control-Allow-Origin"] = "*"
-            return resp
+            return add_cors(resp)
 
 
     # ---------- /youtube-feed ----------
