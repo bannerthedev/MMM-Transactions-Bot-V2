@@ -7650,8 +7650,41 @@ async def start_web_api():
                 )
                 return add_cors(resp)
 
-            # DO NOT use await guild.chunk(cache=True) here.
-            # It can hang and cause Railway/browser 499 errors.
+            # IMPORTANT:
+            # Your team roles are between these two Discord roles:
+            # under "Team Player"
+            # above "————————Team Roles————————"
+            team_player_role = discord.utils.get(guild.roles, name="Team Player")
+            team_roles_marker = discord.utils.get(guild.roles, name="————————Team Roles————————")
+
+            if team_player_role is None:
+                resp = web.json_response(
+                    {
+                        "ok": False,
+                        "error": "team_player_role_not_found",
+                        "message": "Could not find the role named Team Player.",
+                        "teams": [],
+                        "executives": [],
+                    },
+                    status=500,
+                )
+                return add_cors(resp)
+
+            if team_roles_marker is None:
+                resp = web.json_response(
+                    {
+                        "ok": False,
+                        "error": "team_roles_marker_not_found",
+                        "message": "Could not find the role named ————————Team Roles————————.",
+                        "teams": [],
+                        "executives": [],
+                    },
+                    status=500,
+                )
+                return add_cors(resp)
+
+            lower_position = min(team_player_role.position, team_roles_marker.position)
+            upper_position = max(team_player_role.position, team_roles_marker.position)
 
             executive_role = discord.utils.get(guild.roles, name=EXECUTIVE_ROLE_NAME)
 
@@ -7666,10 +7699,16 @@ async def start_web_api():
             teams = []
 
             for role in guild.roles:
+                # Skip marker roles themselves
+                if role.id in [team_player_role.id, team_roles_marker.id]:
+                    continue
+
+                # Skip Executive role
                 if role.name == EXECUTIVE_ROLE_NAME:
                     continue
 
-                if not _is_probably_team_role(role):
+                # Only include roles between Team Player and Team Roles marker
+                if not (lower_position < role.position < upper_position):
                     continue
 
                 members = [
@@ -7678,6 +7717,7 @@ async def start_web_api():
                     if role in member.roles and not member.bot
                 ]
 
+                # If you want to show empty teams too, remove this if block
                 if not members:
                     continue
 
@@ -7697,6 +7737,7 @@ async def start_web_api():
                     }
                 )
 
+            # Sort highest role first, same as Discord role order
             teams.sort(
                 key=lambda team: discord.utils.get(guild.roles, id=int(team["id"])).position,
                 reverse=True,
