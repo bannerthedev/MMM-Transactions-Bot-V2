@@ -7839,6 +7839,8 @@ async def start_web_api():
 
             ignored_role_names = {
                 "@everyone",
+
+                # Required team-management roles
                 "Team-Executive",
                 "Team Executive",
                 "Executive",
@@ -7850,10 +7852,13 @@ async def start_web_api():
                 "Co Captain",
                 "CoCaptain",
                 "Co-Captains",
+                "CoCaptains",
                 "Team Player",
                 "Team Players",
                 "Player",
                 "Players",
+
+                # Staff / server roles
                 "Admin",
                 "Administrator",
                 "Moderator",
@@ -7870,6 +7875,16 @@ async def start_web_api():
                 "Free Agent",
                 "League Staff",
                 "Commissioner",
+
+                # Championship/history roles - do NOT show as teams
+                "Season 7 Champion",
+                "Season 6 Mini Champion",
+                "Season 5 Champion",
+                "Season 4 Champion",
+                "Season 3 Champion",
+                "Season 2 Champion",
+                "Season 1 Champion",
+                "Time Capper",
             }
 
             ignored_role_names_normalized = {
@@ -7877,11 +7892,21 @@ async def start_web_api():
                 for name in ignored_role_names
             }
 
+            blocked_team_keywords = [
+                "champion",
+                "mini champion",
+                "time capper",
+            ]
+
             def is_team_role(role):
                 role_name = role.name.strip()
                 normalized = normalize_role_name(role_name)
 
                 if role == guild.default_role:
+                    return False
+
+                # Block championship/history roles from showing as teams
+                if any(keyword in normalized for keyword in blocked_team_keywords):
                     return False
 
                 if normalized in ignored_role_names_normalized:
