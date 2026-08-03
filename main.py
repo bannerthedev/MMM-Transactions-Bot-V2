@@ -55,38 +55,6 @@ async def home_handler(request: web.Request):
     return add_cors(resp)
 
 
-async def start_web_api():
-    app = web.Application()
-
-    app.router.add_get("/", home_handler)
-    app.router.add_get("/teams", teams_handler)
-
-    # Add these if you have these routes
-    app.router.add_options("/", options_handler)
-    app.router.add_options("/teams", options_handler)
-
-    # If you have standings route:
-    # app.router.add_get("/standings", standings_handler)
-    # app.router.add_options("/standings", options_handler)
-
-    runner = web.AppRunner(app)
-    await runner.setup()
-
-    port = int(os.environ.get("PORT", 8080))
-
-    site = web.TCPSite(runner, "0.0.0.0", port)
-    await site.start()
-
-    print(f"Web API running on port {port}")
-
-    # Load standings AFTER the API starts, not before
-    try:
-        await _load_standings_cache()
-        print("Standings cache loaded.")
-    except Exception as e:
-        print("Failed to load standings cache:", repr(e))
-
-
 
 # ---------------- CONFIG ----------------
 TEST_GUILD_ID = 1338455645896310784
@@ -8480,7 +8448,8 @@ async def teams_handler(request: web.Request):
             )
             return add_cors(resp)
 
-    # ---- ROUTES ----
+    # ---- GET ROUTES ----
+    app.router.add_get("/", home_handler)
     app.router.add_get("/member_count", member_count_handler)
     app.router.add_get("/teams", teams_handler)
     app.router.add_get("/rules", rules_handler)
@@ -8492,10 +8461,12 @@ async def teams_handler(request: web.Request):
     app.router.add_get("/auth/discord/callback", auth_callback)
     app.router.add_get("/auth/me", auth_me)
 
+    # ---- POST ROUTES ----
     app.router.add_post("/report_score", report_score_handler)
     app.router.add_post("/create_broadcast", create_broadcast_handler)
 
-    # CORS OPTIONS
+    # ---- OPTIONS / CORS ROUTES ----
+    app.router.add_route("OPTIONS", "/", options_handler)
     app.router.add_route("OPTIONS", "/member_count", options_handler)
     app.router.add_route("OPTIONS", "/teams", options_handler)
     app.router.add_route("OPTIONS", "/rules", options_handler)
@@ -8507,7 +8478,6 @@ async def teams_handler(request: web.Request):
     app.router.add_route("OPTIONS", "/auth/discord/login", options_handler)
     app.router.add_route("OPTIONS", "/auth/discord/callback", options_handler)
     app.router.add_route("OPTIONS", "/auth/me", options_handler)
-
     # ---------- RAILWAY PORT FIX ----------
     port = int(os.environ.get("PORT", 8080))
 
