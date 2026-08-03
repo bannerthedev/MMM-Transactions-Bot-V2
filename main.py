@@ -8106,6 +8106,325 @@ async def start_web_api():
             )
             return add_cors(resp)
 
+
+    # ---------- /tracker ----------
+    async def tracker_handler(request: web.Request):
+        try:
+            guild = bot.get_guild(TEST_GUILD_ID)
+
+            if guild is None:
+                resp = web.json_response(
+                    {
+                        "ok": False,
+                        "error": "guild_not_found",
+                        "seasons_played": 0,
+                        "active_teams": 0,
+                        "matches_logged": 0,
+                    },
+                    status=200,
+                )
+                return add_cors(resp)
+
+            def normalize_role_name(name):
+                return (
+                    str(name)
+                    .lower()
+                    .replace("—", "-")
+                    .replace("–", "-")
+                    .replace("_", " ")
+                    .replace("-", " ")
+                    .strip()
+                )
+
+            # -------------------------
+            # SEASONS PLAYED
+            # Looks for roles like:
+            # Season 7 Champion
+            # Season 6 Mini Champion
+            # Season 5 Champion
+            # Then uses the highest season number found.
+            # Example: if Season 7 Champion exists, Seasons Played = 8
+            # because you said it adds another number above that.
+            # -------------------------
+            highest_season = 0
+
+            for role in guild.roles:
+                role_name = normalize_role_name(role.name)
+
+                match = re.search(r"season\s+(\d+)", role_name)
+                if match:
+                    season_number = int(match.group(1))
+                    if season_number > highest_season:
+                        highest_season = season_number
+
+            seasons_played = highest_season + 1 if highest_season > 0 else 0
+
+            # -------------------------
+            # ACTIVE TEAMS
+            # Counts real teams only.
+            # Blocks champion/history roles and disbanded/inactive roles.
+            # -------------------------
+            def find_role_any(possible_names):
+                normalized_possible = {
+                    normalize_role_name(name)
+                    for name in possible_names
+                }
+
+                for role in guild.roles:
+                    if normalize_role_name(role.name) in normalized_possible:
+                        return role
+
+                return None
+
+            executive_role = find_role_any(
+                [
+                    "Team-Executive",
+                    "Team Executive",
+                    "Executive",
+                    "Executives",
+                ]
+            )
+
+            captain_role = find_role_any(
+                [
+                    "Captain",
+                    "Captains",
+                ]
+            )
+
+            co_captain_role = find_role_any(
+                [
+                    "Co Captain",
+                    "Co-Captain",
+                    "CoCaptain",
+                    "Co Captains",
+                    "Co-Captains",
+                    "CoCaptains",
+                ]
+            )
+
+            team_player_role = find_role_any(
+                [
+                    "Team Player",
+                    "Team Players",
+                    "Player",
+                    "Players",
+                ]
+            )
+
+            def is_separator_role(role):
+                role_name = role.name.strip()
+                normalized = normalize_role_name(role_name)
+
+                return (
+                    "team roles" in normalized
+                    or "────" in role_name
+                    or "————" in role_name
+                    or "----" in role_name
+                    or "====" in role_name
+                    or "━━━━" in role_name
+                    or "━━━━━━━━" in role_name
+                )
+
+            separator_role = None
+
+            for role in guild.roles:
+                if is_separator_role(role):
+                    separator_role = role
+                    break
+
+            ignored_role_names = {
+                "@everyone",
+
+                "Team-Executive",
+                "Team Executive",
+                "Executive",
+                "Executive Management",
+                "Executives",
+                "Captain",
+                "Captains",
+                "Co-Captain",
+                "Co Captain",
+                "CoCaptain",
+                "Co-Captains",
+                "CoCaptains",
+                "Team Player",
+                "Team Players",
+                "Player",
+                "Players",
+
+                "Admin",
+                "Administrator",
+                "Moderator",
+                "Moderators",
+                "Mod",
+                "Mods",
+                "Staff",
+                "Owner",
+                "League Owner",
+                "Bot",
+                "Bots",
+                "Muted",
+                "Verified",
+                "Free Agent",
+                "League Staff",
+                "Commissioner",
+
+                "Season 7 Champion",
+                "Season 6 Mini Champion",
+                "Season 5 Champion",
+                "Season 4 Champion",
+                "Season 3 Champion",
+                "Season 2 Champion",
+                "Season 1 Champion",
+                "Time Capper",
+            }
+
+            ignored_role_names_normalized = {
+                normalize_role_name(name)
+                for name in ignored_role_names
+            }
+
+            blocked_team_keywords = [
+                "champion",
+                "mini champion",
+                "time capper",
+                "disbanded",
+                "inactive",
+                "former",
+                "old team",
+                "archive",
+                "archived",
+            ]
+
+            def is_team_role(role):
+                role_name = role.name.strip()
+                normalized = normalize_role_name(role_name)
+
+                if role == guild.default_role:
+                    return False
+
+                if normalized in ignored_role_names_normalized:
+                    return False
+
+                if any(keyword in normalized for keyword in blocked_team_keywords):
+                    return False
+
+                if role.managed:
+                    return False
+
+                try:
+                    if role.permissions.administrator:
+                        return False
+                except Exception:
+                    pass
+
+                if executive_role and role.id == executive_role.id:
+                    return False
+
+                if captain_role and role.id == captain_role.id:
+                    return False
+
+                if co_captain_role and role.id == co_captain_role.id:
+                    return False
+
+                if team_player_role and role.id == team_player_role.id:
+                    return False
+
+                if separator_role and role.id == separator_role.id:
+                    return False
+
+                if is_separator_role(role):
+                    return False
+
+                # Same team-role position logic as /teams
+                if team_player_role:
+                    if separator_role:
+                        if not (separator_role.position < role.position < team_player_role.position):
+                            return False
+                    else:
+                        if role.position >= team_player_role.position:
+                            return False
+
+                return True
+
+            all_members = [
+                member
+                for member in guild.members
+                if not member.bot
+            ]
+
+            active_team_roles = []
+
+            for role in guild.roles:
+                if not is_team_role(role):
+                    continue
+
+                team_members = [
+                    member
+                    for member in all_members
+                    if role in member.roles
+                ]
+
+                # Only count it as active if at least 1 human has the role
+                if len(team_members) > 0:
+                    active_team_roles.append(role)
+
+            active_teams = len(active_team_roles)
+
+            # For now, this can stay from your standings/matches system later.
+            # If you already have a matches cache/database, we can plug that in next.
+            matches_logged = 0
+
+            try:
+                if "_matches_cache" in globals():
+                    matches_logged = len(_matches_cache)
+            except Exception:
+                matches_logged = 0
+
+            resp = web.json_response(
+                {
+                    "ok": True,
+                    "seasons_played": seasons_played,
+                    "active_teams": active_teams,
+                    "matches_logged": matches_logged,
+                    "debug": {
+                        "highest_season_role_found": highest_season,
+                        "active_team_roles": [
+                            {
+                                "name": role.name,
+                                "id": str(role.id),
+                                "position": role.position,
+                            }
+                            for role in active_team_roles
+                        ],
+                    },
+                },
+                status=200,
+            )
+            return add_cors(resp)
+
+        except Exception as e:
+            error_text = traceback.format_exc()
+            print("TRACKER ROUTE CRASHED:")
+            print(error_text)
+
+            resp = web.json_response(
+                {
+                    "ok": False,
+                    "error": "tracker_route_crashed",
+                    "details": str(e),
+                    "traceback": error_text,
+                    "seasons_played": 0,
+                    "active_teams": 0,
+                    "matches_logged": 0,
+                },
+                status=200,
+            )
+            return add_cors(resp)
+
+
+
     # ---------- /youtube-feed ----------
     async def youtube_feed_handler(request: web.Request):
         feed_url = "https://www.youtube.com/feeds/videos.xml?channel_id=UCgCMrgrneSsZP1AE0bG9B1w"
@@ -8465,6 +8784,7 @@ async def start_web_api():
     app.router.add_get("/", home_handler)
     app.router.add_get("/member_count", member_count_handler)
     app.router.add_get("/teams", teams_handler)
+    app.router.add_get("/tracker", tracker_handler)
     app.router.add_get("/rules", rules_handler)
     app.router.add_get("/standings", standings_handler)
     app.router.add_get("/staff", staff_handler)
@@ -8483,6 +8803,7 @@ async def start_web_api():
     app.router.add_route("OPTIONS", "/", options_handler)
     app.router.add_route("OPTIONS", "/member_count", options_handler)
     app.router.add_route("OPTIONS", "/teams", options_handler)
+    app.router.add_route("OPTIONS", "/tracker", options_handler)
     app.router.add_route("OPTIONS", "/rules", options_handler)
     app.router.add_route("OPTIONS", "/standings", options_handler)
     app.router.add_route("OPTIONS", "/staff", options_handler)
@@ -8506,10 +8827,11 @@ async def start_web_api():
 
     print(
         f"Web API running on port {port} "
-        f"(/, /member_count, /teams, /rules, /standings, /staff, /youtube-feed, "
+        f"(/, /member_count, /teams, /tracker, /rules, /standings, /staff, /youtube-feed, "
         f"/report_score, /create_broadcast, "
         f"/auth/discord/login, /auth/discord/callback, /auth/me)"
     )
+
 
     # ---------- START BACKGROUND TASKS ----------
     try:
