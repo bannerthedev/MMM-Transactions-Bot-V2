@@ -7643,17 +7643,37 @@ async def start_web_api():
                     {
                         "ok": False,
                         "error": "guild_not_found",
+                        "message": f"Could not find guild with ID {TEST_GUILD_ID}",
                         "teams": [],
                         "executives": [],
                     },
-                    status=404,
+                    status=500,
                 )
                 return add_cors(resp)
 
-            executive_role = discord.utils.get(guild.roles, name="Executive")
-            captain_role = discord.utils.get(guild.roles, name="Captain")
-            co_captain_role = discord.utils.get(guild.roles, name="Co-Captain")
-            team_player_role = discord.utils.get(guild.roles, name="Team Player")
+            # Force Discord member cache to be more complete
+            try:
+                await guild.chunk(cache=True)
+            except Exception as chunk_error:
+                print("Guild chunk failed:", repr(chunk_error))
+
+            # Find role by exact name, with lowercase fallback
+            def find_role(name):
+                role = discord.utils.get(guild.roles, name=name)
+                if role:
+                    return role
+
+                target = name.lower().strip()
+                for r in guild.roles:
+                    if r.name.lower().strip() == target:
+                        return r
+
+                return None
+
+            executive_role = find_role("Executive")
+            captain_role = find_role("Captain")
+            co_captain_role = find_role("Co-Captain")
+            team_player_role = find_role("Team Player")
 
             missing_roles = []
 
@@ -7675,13 +7695,37 @@ async def start_web_api():
                         "ok": False,
                         "error": "missing_required_roles",
                         "missing_roles": missing_roles,
-                        "message": "One or more required Discord roles could not be found. Role names must match exactly.",
+                        "available_roles": [
+                            {
+                                "name": role.name,
+                                "position": role.position,
+                                "id": str(role.id),
+                            }
+                            for role in sorted(guild.roles, key=lambda r: r.position, reverse=True)
+                        ],
                         "teams": [],
                         "executives": [],
                     },
-                    status=500,
+                    status=200,
                 )
                 return add_cors(resp)
+
+            def member_payload(member):
+                return {
+                    "id": str(member.id),
+                    "name": member.display_name,
+                    "username": str(member),
+                    "avatar": member.display_avatar.url if member.display_avatar else None,
+                }
+
+            def role_icon_url(role):
+                try:
+                    if role.icon:
+                        return role.icon.url
+                except Exception:
+                    pass
+
+                return None
 
             ignored_role_names = {
                 "@everyone",
@@ -7702,10 +7746,11 @@ async def start_web_api():
             def is_separator_role(role):
                 name = role.name.strip()
                 return (
-                    "——" in name
-                    or "---" in name
-                    or "Team Roles" in name
-                    or "Roles" == name
+                    "Team Roles" in name
+                    or "────" in name
+                    or "————" in name
+                    or "----" in name
+                    or "====" in name
                 )
 
             def is_team_role(role):
@@ -7718,54 +7763,55 @@ async def start_web_api():
                 if role.managed:
                     return False
 
-                # Team roles should be below Team Player in your Discord role order.
-                # In discord.py, higher roles have larger position numbers.
+                # Try roles under Team Player only
                 if role.position >= team_player_role.position:
                     return False
 
                 return True
 
+            all_members = [m for m in guild.members if not m.bot]
+
             executives = [
-                _member_payload(member)
-                for member in guild.members
-                if executive_role in member.roles and not member.bot
+                member_payload(member)
+                for member in all_members
+                if executive_role in member.roles
             ]
 
             teams = []
 
-            for role in guild.roles:
+            for role in sorted(guild.roles, key=lambda r: r.position, reverse=True):
                 if not is_team_role(role):
                     continue
 
                 team_members = [
                     member
-                    for member in guild.members
-                    if role in member.roles and not member.bot
+                    for member in all_members
+                    if role in member.roles
                 ]
 
                 if not team_members:
                     continue
 
                 captains = [
-                    _member_payload(member)
+                    member_payload(member)
                     for member in team_members
                     if captain_role in member.roles
                 ]
 
                 co_captains = [
-                    _member_payload(member)
+                    member_payload(member)
                     for member in team_members
                     if co_captain_role in member.roles
                 ]
 
                 team_executives = [
-                    _member_payload(member)
+                    member_payload(member)
                     for member in team_members
                     if executive_role in member.roles
                 ]
 
                 players = [
-                    _member_payload(member)
+                    member_payload(member)
                     for member in team_members
                     if team_player_role in member.roles
                     and captain_role not in member.roles
@@ -7777,8 +7823,9 @@ async def start_web_api():
                     {
                         "id": str(role.id),
                         "name": role.name,
+                        "position": role.position,
                         "color": str(role.color),
-                        "logo": _role_icon_url(role),
+                        "logo": role_icon_url(role),
 
                         "captain": captains[0]["name"] if captains else None,
                         "co_captain": co_captains[0]["name"] if co_captains else None,
@@ -7788,38 +7835,65 @@ async def start_web_api():
                         "executives": team_executives,
                         "players": players,
 
-                        "member_count": len(team_members),
+                        "all_team_members_debug": [
+                            {
+                                "name": member.display_name,
+                                "roles": [r.name for r in member.roles],
+                            }
+                            for member in team_members
+                        ],
                     }
                 )
-
-            teams.sort(
-                key=lambda team: discord.utils.get(guild.roles, id=int(team["id"])).position,
-                reverse=True,
-            )
 
             resp = web.json_response(
                 {
                     "ok": True,
+                    "debug": {
+                        "guild": guild.name,
+                        "guild_id": str(guild.id),
+                        "member_count_cached": len(guild.members),
+                        "human_member_count_cached": len(all_members),
+                        "role_positions": {
+                            "Executive": executive_role.position,
+                            "Captain": captain_role.position,
+                            "Co-Captain": co_captain_role.position,
+                            "Team Player": team_player_role.position,
+                        },
+                        "candidate_team_roles": [
+                            {
+                                "name": role.name,
+                                "position": role.position,
+                                "member_count": len([m for m in all_members if role in m.roles]),
+                            }
+                            for role in sorted(guild.roles, key=lambda r: r.position, reverse=True)
+                            if is_team_role(role)
+                        ],
+                    },
                     "teams": teams,
                     "executives": executives,
                     "count": len(teams),
-                }
+                },
+                status=200,
             )
             return add_cors(resp)
 
         except Exception as e:
-            print("Failed to build teams response:", repr(e))
-            traceback.print_exc()
+            import traceback
+
+            error_text = traceback.format_exc()
+            print("TEAMS ROUTE CRASHED:")
+            print(error_text)
 
             resp = web.json_response(
                 {
                     "ok": False,
-                    "error": "teams_failed",
+                    "error": "teams_route_crashed",
                     "details": str(e),
+                    "traceback": error_text,
                     "teams": [],
                     "executives": [],
                 },
-                status=500,
+                status=200,
             )
             return add_cors(resp)
 
