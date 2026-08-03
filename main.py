@@ -7647,26 +7647,17 @@ async def start_web_api():
                         "teams": [],
                         "executives": [],
                     },
-                    status=500,
+                    status=200,
                 )
                 return add_cors(resp)
 
-            # Force Discord member cache to be more complete
-            try:
-                await guild.chunk(cache=True)
-            except Exception as chunk_error:
-                print("Guild chunk failed:", repr(chunk_error))
-
-            # Find role by exact name, with lowercase fallback
+            # Helper: find role by name, case-insensitive
             def find_role(name):
-                role = discord.utils.get(guild.roles, name=name)
-                if role:
-                    return role
-
                 target = name.lower().strip()
-                for r in guild.roles:
-                    if r.name.lower().strip() == target:
-                        return r
+
+                for role in guild.roles:
+                    if role.name.lower().strip() == target:
+                        return role
 
                 return None
 
@@ -7695,13 +7686,18 @@ async def start_web_api():
                         "ok": False,
                         "error": "missing_required_roles",
                         "missing_roles": missing_roles,
+                        "message": "One or more required Discord roles could not be found. Check spelling/capitalization.",
                         "available_roles": [
                             {
                                 "name": role.name,
                                 "position": role.position,
                                 "id": str(role.id),
                             }
-                            for role in sorted(guild.roles, key=lambda r: r.position, reverse=True)
+                            for role in sorted(
+                                guild.roles,
+                                key=lambda r: r.position,
+                                reverse=True,
+                            )
                         ],
                         "teams": [],
                         "executives": [],
@@ -7727,34 +7723,55 @@ async def start_web_api():
 
                 return None
 
-            ignored_role_names = {
-                "@everyone",
-                "Executive",
-                "Captain",
-                "Co-Captain",
-                "Team Player",
-                "Admin",
-                "Administrator",
-                "Moderator",
-                "Mod",
-                "Staff",
-                "Owner",
-                "Bot",
-                "Bots",
-            }
-
             def is_separator_role(role):
                 name = role.name.strip()
+
                 return (
                     "Team Roles" in name
+                    or "team roles" in name.lower()
                     or "────" in name
                     or "————" in name
                     or "----" in name
                     or "====" in name
                 )
 
+            ignored_role_names = {
+                "@everyone",
+                "Executive",
+                "Executive Management",
+                "Executives",
+                "Captain",
+                "Captains",
+                "Co-Captain",
+                "Co Captain",
+                "CoCaptain",
+                "Co-Captains",
+                "Team Player",
+                "Team Players",
+                "Player",
+                "Players",
+                "Admin",
+                "Administrator",
+                "Moderator",
+                "Moderators",
+                "Mod",
+                "Mods",
+                "Staff",
+                "Owner",
+                "League Owner",
+                "Bot",
+                "Bots",
+                "Muted",
+                "Verified",
+            }
+
             def is_team_role(role):
-                if role.name in ignored_role_names:
+                role_name = role.name.strip()
+
+                if role_name in ignored_role_names:
+                    return False
+
+                if role_name.lower() in {name.lower() for name in ignored_role_names}:
                     return False
 
                 if is_separator_role(role):
@@ -7763,13 +7780,13 @@ async def start_web_api():
                 if role.managed:
                     return False
 
-                # Try roles under Team Player only
+                # Team roles should be below Team Player in the Discord role list
                 if role.position >= team_player_role.position:
                     return False
 
                 return True
 
-            all_members = [m for m in guild.members if not m.bot]
+            all_members = [member for member in guild.members if not member.bot]
 
             executives = [
                 member_payload(member)
@@ -7779,16 +7796,24 @@ async def start_web_api():
 
             teams = []
 
-            for role in sorted(guild.roles, key=lambda r: r.position, reverse=True):
-                if not is_team_role(role):
-                    continue
+            candidate_team_roles = [
+                role
+                for role in sorted(
+                    guild.roles,
+                    key=lambda r: r.position,
+                    reverse=True,
+                )
+                if is_team_role(role)
+            ]
 
+            for team_role in candidate_team_roles:
                 team_members = [
                     member
                     for member in all_members
-                    if role in member.roles
+                    if team_role in member.roles
                 ]
 
+                # Skip roles that have no members
                 if not team_members:
                     continue
 
@@ -7821,57 +7846,68 @@ async def start_web_api():
 
                 teams.append(
                     {
-                        "id": str(role.id),
-                        "name": role.name,
-                        "position": role.position,
-                        "color": str(role.color),
-                        "logo": role_icon_url(role),
+                        "id": str(team_role.id),
+                        "name": team_role.name,
+                        "position": team_role.position,
+                        "color": str(team_role.color),
+                        "logo": role_icon_url(team_role),
 
+                        # Simple fields for your current teams.html
                         "captain": captains[0]["name"] if captains else None,
                         "co_captain": co_captains[0]["name"] if co_captains else None,
+                        "coCaptain": co_captains[0]["name"] if co_captains else None,
 
+                        # Full arrays for better display later
                         "captains": captains,
                         "co_captains": co_captains,
+                        "coCaptains": co_captains,
                         "executives": team_executives,
                         "players": players,
 
-                        "all_team_members_debug": [
-                            {
-                                "name": member.display_name,
-                                "roles": [r.name for r in member.roles],
-                            }
-                            for member in team_members
-                        ],
+                        "member_count": len(team_members),
                     }
                 )
 
             resp = web.json_response(
                 {
                     "ok": True,
+                    "guild": {
+                        "id": str(guild.id),
+                        "name": guild.name,
+                    },
+                    "count": len(teams),
+                    "teams": teams,
+                    "executives": executives,
                     "debug": {
-                        "guild": guild.name,
-                        "guild_id": str(guild.id),
-                        "member_count_cached": len(guild.members),
-                        "human_member_count_cached": len(all_members),
-                        "role_positions": {
-                            "Executive": executive_role.position,
-                            "Captain": captain_role.position,
-                            "Co-Captain": co_captain_role.position,
-                            "Team Player": team_player_role.position,
+                        "cached_members": len(guild.members),
+                        "cached_human_members": len(all_members),
+                        "required_roles": {
+                            "Executive": {
+                                "id": str(executive_role.id),
+                                "position": executive_role.position,
+                            },
+                            "Captain": {
+                                "id": str(captain_role.id),
+                                "position": captain_role.position,
+                            },
+                            "Co-Captain": {
+                                "id": str(co_captain_role.id),
+                                "position": co_captain_role.position,
+                            },
+                            "Team Player": {
+                                "id": str(team_player_role.id),
+                                "position": team_player_role.position,
+                            },
                         },
                         "candidate_team_roles": [
                             {
                                 "name": role.name,
+                                "id": str(role.id),
                                 "position": role.position,
-                                "member_count": len([m for m in all_members if role in m.roles]),
                             }
-                            for role in sorted(guild.roles, key=lambda r: r.position, reverse=True)
-                            if is_team_role(role)
+                            for role in candidate_team_roles
                         ],
                     },
-                    "teams": teams,
-                    "executives": executives,
-                    "count": len(teams),
                 },
                 status=200,
             )
