@@ -38,8 +38,53 @@ from discord import app_commands, Object
 def add_cors(resp):
     resp.headers["Access-Control-Allow-Origin"] = "*"
     resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
-    resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
+    resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
     return resp
+
+
+async def options_handler(request: web.Request):
+    resp = web.Response(status=204)
+    return add_cors(resp)
+
+
+async def home_handler(request: web.Request):
+    resp = web.json_response({
+        "ok": True,
+        "message": "MMM API is running"
+    })
+    return add_cors(resp)
+
+
+async def start_web_api():
+    app = web.Application()
+
+    app.router.add_get("/", home_handler)
+    app.router.add_get("/teams", teams_handler)
+
+    # Add these if you have these routes
+    app.router.add_options("/", options_handler)
+    app.router.add_options("/teams", options_handler)
+
+    # If you have standings route:
+    # app.router.add_get("/standings", standings_handler)
+    # app.router.add_options("/standings", options_handler)
+
+    runner = web.AppRunner(app)
+    await runner.setup()
+
+    port = int(os.environ.get("PORT", 8080))
+
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+
+    print(f"Web API running on port {port}")
+
+    # Load standings AFTER the API starts, not before
+    try:
+        await _load_standings_cache()
+        print("Standings cache loaded.")
+    except Exception as e:
+        print("Failed to load standings cache:", repr(e))
 
 
 
@@ -7575,7 +7620,25 @@ async def options_handler(request: web.Request):
     return resp
 
 async def start_web_api():
-    await _load_standings_cache()
+    app = web.Application()
+
+    app.router.add_get("/", home_handler)
+    app.router.add_get("/teams", teams_handler)
+
+    app.router.add_options("/", options_handler)
+    app.router.add_options("/teams", options_handler)
+
+    runner = web.AppRunner(app)
+    await runner.setup()
+
+    port = int(os.environ.get("PORT", 8080))
+
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+
+    print(f"Web API running on port {port}")
+
+    asyncio.create_task(_load_standings_cache())
 
     app = web.Application()
 
@@ -8543,22 +8606,27 @@ class MainBot(commands.Bot):
 
 bot = MainBot()
 
+web_api_started = False
+
 @bot.event
 async def on_ready():
+    global web_api_started
+
     print(f"Logged in as {bot.user} (ID: {bot.user.id})")
 
-    guild = bot.get_guild(TEST_GUILD_ID)
+    if not web_api_started:
+        web_api_started = True
+        bot.loop.create_task(start_web_api())
+        print("Started web API task")
 
-    if guild:
-        try:
-            print("Loading guild members once...")
+    # Do slow Discord stuff AFTER the API starts
+    print("Loading guild members once...")
+    try:
+        for guild in bot.guilds:
             await guild.chunk(cache=True)
-            print(f"Loaded members: {len(guild.members)}")
-        except Exception:
-            print("Failed to chunk guild members:")
-            traceback.print_exc()
-
-    await _populate_initial_standings_cache()
+        print("Finished loading guild members.")
+    except Exception as e:
+        print("Failed to load guild members:", repr(e))
 
 @bot.listen("on_message")
 async def standings_on_message(message: discord.Message):
