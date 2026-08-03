@@ -7590,26 +7590,6 @@ async def options_handler(request: web.Request):
 async def start_web_api():
     app = web.Application()
 
-    app.router.add_get("/", home_handler)
-    app.router.add_get("/teams", teams_handler)
-
-    app.router.add_options("/", options_handler)
-    app.router.add_options("/teams", options_handler)
-
-    runner = web.AppRunner(app)
-    await runner.setup()
-
-    port = int(os.environ.get("PORT", 8080))
-
-    site = web.TCPSite(runner, "0.0.0.0", port)
-    await site.start()
-
-    print(f"Web API running on port {port}")
-
-    asyncio.create_task(_load_standings_cache())
-
-    app = web.Application()
-
     # ---------- CORS HELPERS ----------
     def add_cors(resp):
         resp.headers["Access-Control-Allow-Origin"] = "*"
@@ -7619,6 +7599,30 @@ async def start_web_api():
 
     async def options_handler(request: web.Request):
         resp = web.Response(status=204)
+        return add_cors(resp)
+
+    # ---------- / ----------
+    async def home_handler(request: web.Request):
+        resp = web.json_response(
+            {
+                "ok": True,
+                "message": "MMM API is running",
+                "routes": [
+                    "/",
+                    "/member_count",
+                    "/teams",
+                    "/rules",
+                    "/standings",
+                    "/staff",
+                    "/youtube-feed",
+                    "/report_score",
+                    "/create_broadcast",
+                    "/auth/discord/login",
+                    "/auth/discord/callback",
+                    "/auth/me",
+                ],
+            }
+        )
         return add_cors(resp)
 
     # ---------- /member_count ----------
@@ -7671,425 +7675,411 @@ async def start_web_api():
                 status=500,
             )
             return add_cors(resp)
-        
-# ---------- /teams ----------
-async def teams_handler(request: web.Request):
-    try:
-        guild = bot.get_guild(TEST_GUILD_ID)
 
-        if guild is None:
-            resp = web.json_response(
-                {
-                    "ok": False,
-                    "error": "guild_not_found",
-                    "message": f"Could not find guild with ID {TEST_GUILD_ID}",
-                    "teams": [],
-                    "executives": [],
-                },
-                status=200,
+    # ---------- /teams ----------
+    async def teams_handler(request: web.Request):
+        try:
+            guild = bot.get_guild(TEST_GUILD_ID)
+
+            if guild is None:
+                resp = web.json_response(
+                    {
+                        "ok": False,
+                        "error": "guild_not_found",
+                        "message": f"Could not find guild with ID {TEST_GUILD_ID}",
+                        "teams": [],
+                        "executives": [],
+                    },
+                    status=200,
+                )
+                return add_cors(resp)
+
+            def normalize_role_name(name):
+                return (
+                    str(name)
+                    .lower()
+                    .replace("—", "-")
+                    .replace("–", "-")
+                    .replace("_", " ")
+                    .replace("-", " ")
+                    .strip()
+                )
+
+            def find_role_any(possible_names):
+                normalized_possible = {
+                    normalize_role_name(name)
+                    for name in possible_names
+                }
+
+                for role in guild.roles:
+                    if normalize_role_name(role.name) in normalized_possible:
+                        return role
+
+                return None
+
+            executive_role = find_role_any(
+                [
+                    "Team-Executive",
+                    "Team Executive",
+                    "Executive",
+                    "Executives",
+                ]
             )
-            return add_cors(resp)
 
-        # Normalize role names so small differences do not break everything
-        def normalize_role_name(name):
-            return (
-                str(name)
-                .lower()
-                .replace("—", "-")
-                .replace("–", "-")
-                .replace("_", " ")
-                .replace("-", " ")
-                .strip()
+            captain_role = find_role_any(
+                [
+                    "Captain",
+                    "Captains",
+                ]
             )
 
-        # Find role using multiple possible names
-        def find_role_any(possible_names):
-            normalized_possible = {
-                normalize_role_name(name)
-                for name in possible_names
-            }
+            co_captain_role = find_role_any(
+                [
+                    "Co Captain",
+                    "Co-Captain",
+                    "CoCaptain",
+                    "Co Captains",
+                    "Co-Captains",
+                    "CoCaptains",
+                ]
+            )
+
+            team_player_role = find_role_any(
+                [
+                    "Team Player",
+                    "Team Players",
+                    "Player",
+                    "Players",
+                ]
+            )
+
+            missing_roles = []
+
+            if executive_role is None:
+                missing_roles.append("Team-Executive")
+
+            if captain_role is None:
+                missing_roles.append("Captain")
+
+            if co_captain_role is None:
+                missing_roles.append("Co Captain")
+
+            if team_player_role is None:
+                missing_roles.append("Team Player")
+
+            if missing_roles:
+                resp = web.json_response(
+                    {
+                        "ok": False,
+                        "error": "missing_required_roles",
+                        "missing_roles": missing_roles,
+                        "message": "One or more required Discord roles could not be found. Check spelling/capitalization.",
+                        "available_roles": [
+                            {
+                                "name": role.name,
+                                "position": role.position,
+                                "id": str(role.id),
+                            }
+                            for role in sorted(
+                                guild.roles,
+                                key=lambda r: r.position,
+                                reverse=True,
+                            )
+                        ],
+                        "teams": [],
+                        "executives": [],
+                    },
+                    status=200,
+                )
+                return add_cors(resp)
+
+            def member_payload(member):
+                return {
+                    "id": str(member.id),
+                    "name": member.display_name,
+                    "username": str(member),
+                    "avatar": member.display_avatar.url if member.display_avatar else None,
+                }
+
+            def role_icon_url(role):
+                try:
+                    if role.icon:
+                        return role.icon.url
+                except Exception:
+                    pass
+
+                try:
+                    if role.display_icon:
+                        return role.display_icon.url
+                except Exception:
+                    pass
+
+                return None
+
+            def is_separator_role(role):
+                role_name = role.name.strip()
+                normalized = normalize_role_name(role_name)
+
+                return (
+                    "team roles" in normalized
+                    or "────" in role_name
+                    or "————" in role_name
+                    or "----" in role_name
+                    or "====" in role_name
+                    or "━━━━" in role_name
+                    or "━━━━━━━━" in role_name
+                )
+
+            separator_role = None
 
             for role in guild.roles:
-                if normalize_role_name(role.name) in normalized_possible:
-                    return role
+                if is_separator_role(role):
+                    separator_role = role
+                    break
 
-            return None
-
-        # Your actual Discord role names, with fallback variations
-        executive_role = find_role_any(
-            [
+            ignored_role_names = {
+                "@everyone",
                 "Team-Executive",
                 "Team Executive",
                 "Executive",
+                "Executive Management",
                 "Executives",
-            ]
-        )
-
-        captain_role = find_role_any(
-            [
                 "Captain",
                 "Captains",
-            ]
-        )
-
-        co_captain_role = find_role_any(
-            [
-                "Co Captain",
                 "Co-Captain",
+                "Co Captain",
                 "CoCaptain",
-                "Co Captains",
                 "Co-Captains",
-                "CoCaptains",
-            ]
-        )
-
-        team_player_role = find_role_any(
-            [
                 "Team Player",
                 "Team Players",
                 "Player",
                 "Players",
+                "Admin",
+                "Administrator",
+                "Moderator",
+                "Moderators",
+                "Mod",
+                "Mods",
+                "Staff",
+                "Owner",
+                "League Owner",
+                "Bot",
+                "Bots",
+                "Muted",
+                "Verified",
+                "Free Agent",
+                "League Staff",
+                "Commissioner",
+            }
+
+            ignored_role_names_normalized = {
+                normalize_role_name(name)
+                for name in ignored_role_names
+            }
+
+            def is_team_role(role):
+                role_name = role.name.strip()
+                normalized = normalize_role_name(role_name)
+
+                if role == guild.default_role:
+                    return False
+
+                if normalized in ignored_role_names_normalized:
+                    return False
+
+                if role.id in {
+                    executive_role.id,
+                    captain_role.id,
+                    co_captain_role.id,
+                    team_player_role.id,
+                }:
+                    return False
+
+                if separator_role and role.id == separator_role.id:
+                    return False
+
+                if is_separator_role(role):
+                    return False
+
+                if role.managed:
+                    return False
+
+                try:
+                    if role.permissions.administrator:
+                        return False
+                except Exception:
+                    pass
+
+                # Team roles should be BELOW Team Player and ABOVE the Team Roles separator
+                if separator_role:
+                    if not (separator_role.position < role.position < team_player_role.position):
+                        return False
+                else:
+                    if role.position >= team_player_role.position:
+                        return False
+
+                return True
+
+            all_members = [
+                member
+                for member in guild.members
+                if not member.bot
             ]
-        )
 
-        missing_roles = []
+            executives = [
+                member_payload(member)
+                for member in all_members
+                if executive_role in member.roles
+            ]
 
-        if executive_role is None:
-            missing_roles.append("Team-Executive")
+            candidate_team_roles = [
+                role
+                for role in sorted(
+                    guild.roles,
+                    key=lambda r: r.position,
+                    reverse=True,
+                )
+                if is_team_role(role)
+            ]
 
-        if captain_role is None:
-            missing_roles.append("Captain")
+            teams = []
 
-        if co_captain_role is None:
-            missing_roles.append("Co Captain")
+            for team_role in candidate_team_roles:
+                team_members = [
+                    member
+                    for member in all_members
+                    if team_role in member.roles
+                ]
 
-        if team_player_role is None:
-            missing_roles.append("Team Player")
+                if not team_members:
+                    continue
 
-        if missing_roles:
+                captains = [
+                    member_payload(member)
+                    for member in team_members
+                    if captain_role in member.roles
+                ]
+
+                co_captains = [
+                    member_payload(member)
+                    for member in team_members
+                    if co_captain_role in member.roles
+                ]
+
+                team_executives = [
+                    member_payload(member)
+                    for member in team_members
+                    if executive_role in member.roles
+                ]
+
+                players = [
+                    member_payload(member)
+                    for member in team_members
+                    if team_player_role in member.roles
+                    and captain_role not in member.roles
+                    and co_captain_role not in member.roles
+                    and executive_role not in member.roles
+                ]
+
+                captains = sorted(captains, key=lambda m: m["name"].lower())
+                co_captains = sorted(co_captains, key=lambda m: m["name"].lower())
+                team_executives = sorted(team_executives, key=lambda m: m["name"].lower())
+                players = sorted(players, key=lambda m: m["name"].lower())
+
+                teams.append(
+                    {
+                        "id": str(team_role.id),
+                        "role_id": str(team_role.id),
+                        "name": team_role.name,
+                        "position": team_role.position,
+                        "color": str(team_role.color),
+                        "logo": role_icon_url(team_role),
+
+                        "captain": captains[0]["name"] if captains else None,
+                        "co_captain": co_captains[0]["name"] if co_captains else None,
+                        "coCaptain": co_captains[0]["name"] if co_captains else None,
+
+                        "captains": captains,
+                        "co_captains": co_captains,
+                        "coCaptains": co_captains,
+                        "executives": team_executives,
+                        "players": players,
+
+                        "member_count": len(team_members),
+                    }
+                )
+
+            resp = web.json_response(
+                {
+                    "ok": True,
+                    "guild": {
+                        "id": str(guild.id),
+                        "name": guild.name,
+                    },
+                    "count": len(teams),
+                    "teams": teams,
+                    "executives": executives,
+                    "debug": {
+                        "cached_members": len(guild.members),
+                        "cached_human_members": len(all_members),
+                        "matched_required_roles": {
+                            "executive": {
+                                "name": executive_role.name,
+                                "id": str(executive_role.id),
+                                "position": executive_role.position,
+                            },
+                            "captain": {
+                                "name": captain_role.name,
+                                "id": str(captain_role.id),
+                                "position": captain_role.position,
+                            },
+                            "co_captain": {
+                                "name": co_captain_role.name,
+                                "id": str(co_captain_role.id),
+                                "position": co_captain_role.position,
+                            },
+                            "team_player": {
+                                "name": team_player_role.name,
+                                "id": str(team_player_role.id),
+                                "position": team_player_role.position,
+                            },
+                            "separator": {
+                                "name": separator_role.name,
+                                "id": str(separator_role.id),
+                                "position": separator_role.position,
+                            } if separator_role else None,
+                        },
+                        "candidate_team_roles": [
+                            {
+                                "name": role.name,
+                                "id": str(role.id),
+                                "position": role.position,
+                            }
+                            for role in candidate_team_roles
+                        ],
+                    },
+                },
+                status=200,
+            )
+            return add_cors(resp)
+
+        except Exception as e:
+            error_text = traceback.format_exc()
+            print("TEAMS ROUTE CRASHED:")
+            print(error_text)
+
             resp = web.json_response(
                 {
                     "ok": False,
-                    "error": "missing_required_roles",
-                    "missing_roles": missing_roles,
-                    "message": "One or more required Discord roles could not be found. Check spelling/capitalization.",
-                    "available_roles": [
-                        {
-                            "name": role.name,
-                            "position": role.position,
-                            "id": str(role.id),
-                        }
-                        for role in sorted(
-                            guild.roles,
-                            key=lambda r: r.position,
-                            reverse=True,
-                        )
-                    ],
+                    "error": "teams_route_crashed",
+                    "details": str(e),
+                    "traceback": error_text,
                     "teams": [],
                     "executives": [],
                 },
                 status=200,
             )
             return add_cors(resp)
-
-        def member_payload(member):
-            return {
-                "id": str(member.id),
-                "name": member.display_name,
-                "username": str(member),
-                "avatar": member.display_avatar.url if member.display_avatar else None,
-            }
-
-        def role_icon_url(role):
-            try:
-                if role.icon:
-                    return role.icon.url
-            except Exception:
-                pass
-
-            try:
-                if role.display_icon:
-                    return role.display_icon.url
-            except Exception:
-                pass
-
-            return None
-
-        def is_separator_role(role):
-            role_name = role.name.strip()
-            normalized = normalize_role_name(role_name)
-
-            return (
-                "team roles" in normalized
-                or "────" in role_name
-                or "————" in role_name
-                or "----" in role_name
-                or "====" in role_name
-                or "━━━━" in role_name
-                or "━━━━━━━━" in role_name
-            )
-
-        # Find the separator below the team roles section if it exists
-        separator_role = None
-
-        for role in guild.roles:
-            if is_separator_role(role):
-                separator_role = role
-                break
-
-        ignored_role_names = {
-            "@everyone",
-            "Team-Executive",
-            "Team Executive",
-            "Executive",
-            "Executive Management",
-            "Executives",
-            "Captain",
-            "Captains",
-            "Co-Captain",
-            "Co Captain",
-            "CoCaptain",
-            "Co-Captains",
-            "Team Player",
-            "Team Players",
-            "Player",
-            "Players",
-            "Admin",
-            "Administrator",
-            "Moderator",
-            "Moderators",
-            "Mod",
-            "Mods",
-            "Staff",
-            "Owner",
-            "League Owner",
-            "Bot",
-            "Bots",
-            "Muted",
-            "Verified",
-            "Free Agent",
-            "League Staff",
-            "Commissioner",
-        }
-
-        ignored_role_names_normalized = {
-            normalize_role_name(name)
-            for name in ignored_role_names
-        }
-
-        def is_team_role(role):
-            role_name = role.name.strip()
-            normalized = normalize_role_name(role_name)
-
-            if role == guild.default_role:
-                return False
-
-            if normalized in ignored_role_names_normalized:
-                return False
-
-            if role.id in {
-                executive_role.id,
-                captain_role.id,
-                co_captain_role.id,
-                team_player_role.id,
-            }:
-                return False
-
-            if separator_role and role.id == separator_role.id:
-                return False
-
-            if is_separator_role(role):
-                return False
-
-            if role.managed:
-                return False
-
-            try:
-                if role.permissions.administrator:
-                    return False
-            except Exception:
-                pass
-
-            # Best method:
-            # Team roles should be BELOW Team Player and ABOVE the Team Roles separator
-            if separator_role:
-                if not (separator_role.position < role.position < team_player_role.position):
-                    return False
-
-            # Fallback method if there is no separator role:
-            # Team roles should be below Team Player
-            else:
-                if role.position >= team_player_role.position:
-                    return False
-
-            return True
-
-        all_members = [
-            member
-            for member in guild.members
-            if not member.bot
-        ]
-
-        executives = [
-            member_payload(member)
-            for member in all_members
-            if executive_role in member.roles
-        ]
-
-        candidate_team_roles = [
-            role
-            for role in sorted(
-                guild.roles,
-                key=lambda r: r.position,
-                reverse=True,
-            )
-            if is_team_role(role)
-        ]
-
-        teams = []
-
-        for team_role in candidate_team_roles:
-            team_members = [
-                member
-                for member in all_members
-                if team_role in member.roles
-            ]
-
-            # Skip roles that have no members
-            if not team_members:
-                continue
-
-            captains = [
-                member_payload(member)
-                for member in team_members
-                if captain_role in member.roles
-            ]
-
-            co_captains = [
-                member_payload(member)
-                for member in team_members
-                if co_captain_role in member.roles
-            ]
-
-            team_executives = [
-                member_payload(member)
-                for member in team_members
-                if executive_role in member.roles
-            ]
-
-            players = [
-                member_payload(member)
-                for member in team_members
-                if team_player_role in member.roles
-                and captain_role not in member.roles
-                and co_captain_role not in member.roles
-                and executive_role not in member.roles
-            ]
-
-            captains = sorted(captains, key=lambda m: m["name"].lower())
-            co_captains = sorted(co_captains, key=lambda m: m["name"].lower())
-            team_executives = sorted(team_executives, key=lambda m: m["name"].lower())
-            players = sorted(players, key=lambda m: m["name"].lower())
-
-            teams.append(
-                {
-                    "id": str(team_role.id),
-                    "role_id": str(team_role.id),
-                    "name": team_role.name,
-                    "position": team_role.position,
-                    "color": str(team_role.color),
-                    "logo": role_icon_url(team_role),
-
-                    # Simple fields for your current teams.html
-                    "captain": captains[0]["name"] if captains else None,
-                    "co_captain": co_captains[0]["name"] if co_captains else None,
-                    "coCaptain": co_captains[0]["name"] if co_captains else None,
-
-                    # Full arrays for better display later
-                    "captains": captains,
-                    "co_captains": co_captains,
-                    "coCaptains": co_captains,
-                    "executives": team_executives,
-                    "players": players,
-
-                    "member_count": len(team_members),
-                }
-            )
-
-        resp = web.json_response(
-            {
-                "ok": True,
-                "guild": {
-                    "id": str(guild.id),
-                    "name": guild.name,
-                },
-                "count": len(teams),
-                "teams": teams,
-                "executives": executives,
-                "debug": {
-                    "cached_members": len(guild.members),
-                    "cached_human_members": len(all_members),
-                    "matched_required_roles": {
-                        "executive": {
-                            "name": executive_role.name,
-                            "id": str(executive_role.id),
-                            "position": executive_role.position,
-                        },
-                        "captain": {
-                            "name": captain_role.name,
-                            "id": str(captain_role.id),
-                            "position": captain_role.position,
-                        },
-                        "co_captain": {
-                            "name": co_captain_role.name,
-                            "id": str(co_captain_role.id),
-                            "position": co_captain_role.position,
-                        },
-                        "team_player": {
-                            "name": team_player_role.name,
-                            "id": str(team_player_role.id),
-                            "position": team_player_role.position,
-                        },
-                        "separator": {
-                            "name": separator_role.name,
-                            "id": str(separator_role.id),
-                            "position": separator_role.position,
-                        } if separator_role else None,
-                    },
-                    "candidate_team_roles": [
-                        {
-                            "name": role.name,
-                            "id": str(role.id),
-                            "position": role.position,
-                        }
-                        for role in candidate_team_roles
-                    ],
-                },
-            },
-            status=200,
-        )
-        return add_cors(resp)
-
-    except Exception as e:
-        import traceback
-
-        error_text = traceback.format_exc()
-        print("TEAMS ROUTE CRASHED:")
-        print(error_text)
-
-        resp = web.json_response(
-            {
-                "ok": False,
-                "error": "teams_route_crashed",
-                "details": str(e),
-                "traceback": error_text,
-                "teams": [],
-                "executives": [],
-            },
-            status=200,
-        )
-        return add_cors(resp)
-
 
     # ---------- /youtube-feed ----------
     async def youtube_feed_handler(request: web.Request):
@@ -8135,7 +8125,6 @@ async def teams_handler(request: web.Request):
             )
             return add_cors(response)
 
-
     # ---------- /rules ----------
     async def rules_handler(request: web.Request):
         try:
@@ -8147,13 +8136,13 @@ async def teams_handler(request: web.Request):
 
                         response = web.json_response(
                             {
+                                "ok": False,
                                 "error": f"google_doc_fetch_failed_{resp.status}",
                                 "sections": [],
                             },
                             status=500,
                         )
-                        response.headers["Access-Control-Allow-Origin"] = "*"
-                        return response
+                        return add_cors(response)
 
                     doc_html = await resp.text()
 
@@ -8166,21 +8155,21 @@ async def teams_handler(request: web.Request):
                     "count": len(sections),
                 }
             )
-            response.headers["Access-Control-Allow-Origin"] = "*"
-            return response
+            return add_cors(response)
 
         except Exception as e:
             print("Rules handler error:", repr(e))
+            traceback.print_exc()
 
             response = web.json_response(
                 {
+                    "ok": False,
                     "error": str(e),
                     "sections": [],
                 },
                 status=500,
             )
-            response.headers["Access-Control-Allow-Origin"] = "*"
-            return response
+            return add_cors(response)
 
     # ---------- /standings ----------
     async def standings_handler(request: web.Request):
@@ -8232,8 +8221,8 @@ async def teams_handler(request: web.Request):
                 status=500,
             )
             return add_cors(resp)
-        
-    # /staff
+
+    # ---------- /staff ----------
     async def staff_handler(request: web.Request):
         STAFF_ROLE_ORDER = [
             "owner",
@@ -8254,15 +8243,14 @@ async def teams_handler(request: web.Request):
         }
 
         FALLBACK_ROLE_COLORS = {
-            "owner": "#facc15",       # yellow
-            "dev": "#3b82f6",         # blue
-            "admins": "#ef4444",      # red
-            "monke mods": "#a855f7",  # purple
-            "trial mods": "#22c55e",  # green
-            "helper": "#14b8a6",      # teal
+            "owner": "#facc15",
+            "dev": "#3b82f6",
+            "admins": "#ef4444",
+            "monke mods": "#a855f7",
+            "trial mods": "#22c55e",
+            "helper": "#14b8a6",
         }
 
-        # Custom username overrides
         CUSTOM_DISPLAY_ROLES = {
             "banner1234": "DEV",
             "mmm.compsova": "OWNER",
@@ -8280,8 +8268,7 @@ async def teams_handler(request: web.Request):
                     },
                     status=404,
                 )
-                resp.headers["Access-Control-Allow-Origin"] = "*"
-                return resp
+                return add_cors(resp)
 
             staff = []
 
@@ -8299,7 +8286,6 @@ async def teams_handler(request: web.Request):
                 role_color = None
                 role_sort_index = 999
 
-                # Check custom users first
                 custom_role = None
                 for name in member_names:
                     if name in CUSTOM_DISPLAY_ROLES:
@@ -8310,9 +8296,12 @@ async def teams_handler(request: web.Request):
                     custom_key = custom_role.lower()
 
                     display_role_name = custom_role
-                    role_sort_index = STAFF_ROLE_ORDER.index(custom_key) if custom_key in STAFF_ROLE_ORDER else 999
+                    role_sort_index = (
+                        STAFF_ROLE_ORDER.index(custom_key)
+                        if custom_key in STAFF_ROLE_ORDER
+                        else 999
+                    )
 
-                    # Try to find matching Discord role color
                     matching_role = None
                     for role in member.roles:
                         if role.name.lower() == custom_key:
@@ -8325,7 +8314,6 @@ async def teams_handler(request: web.Request):
                         role_color = FALLBACK_ROLE_COLORS.get(custom_key, "#facc15")
 
                 else:
-                    # Check Discord roles in desired order
                     for role_key in STAFF_ROLE_ORDER:
                         found_role = None
 
@@ -8345,11 +8333,9 @@ async def teams_handler(request: web.Request):
 
                             break
 
-                # Skip people who do not have one of the staff roles
                 if not display_role_name:
                     continue
 
-                avatar_url = None
                 try:
                     avatar_url = member.display_avatar.url
                 except Exception:
@@ -8380,10 +8366,10 @@ async def teams_handler(request: web.Request):
                     "count": len(staff),
                 }
             )
-            resp.headers["Access-Control-Allow-Origin"] = "*"
-            return resp
+            return add_cors(resp)
 
         except Exception as e:
+            print("Error in /staff:")
             traceback.print_exc()
 
             resp = web.json_response(
@@ -8394,13 +8380,13 @@ async def teams_handler(request: web.Request):
                 },
                 status=500,
             )
-            resp.headers["Access-Control-Allow-Origin"] = "*"
-            return resp
+            return add_cors(resp)
 
-    # ---------- Placeholder POST handlers if you already use these ----------
+    # ---------- /report_score ----------
     async def report_score_handler(request: web.Request):
         try:
             data = await request.json()
+
             resp = web.json_response(
                 {
                     "ok": True,
@@ -8423,9 +8409,11 @@ async def teams_handler(request: web.Request):
             )
             return add_cors(resp)
 
+    # ---------- /create_broadcast ----------
     async def create_broadcast_handler(request: web.Request):
         try:
             data = await request.json()
+
             resp = web.json_response(
                 {
                     "ok": True,
@@ -8448,7 +8436,7 @@ async def teams_handler(request: web.Request):
             )
             return add_cors(resp)
 
-    # ---- GET ROUTES ----
+    # ---------- REGISTER GET ROUTES ----------
     app.router.add_get("/", home_handler)
     app.router.add_get("/member_count", member_count_handler)
     app.router.add_get("/teams", teams_handler)
@@ -8457,15 +8445,16 @@ async def teams_handler(request: web.Request):
     app.router.add_get("/staff", staff_handler)
     app.router.add_get("/youtube-feed", youtube_feed_handler)
 
+    # These auth handlers must already exist somewhere else in your file
     app.router.add_get("/auth/discord/login", auth_login)
     app.router.add_get("/auth/discord/callback", auth_callback)
     app.router.add_get("/auth/me", auth_me)
 
-    # ---- POST ROUTES ----
+    # ---------- REGISTER POST ROUTES ----------
     app.router.add_post("/report_score", report_score_handler)
     app.router.add_post("/create_broadcast", create_broadcast_handler)
 
-    # ---- OPTIONS / CORS ROUTES ----
+    # ---------- REGISTER OPTIONS / CORS ROUTES ----------
     app.router.add_route("OPTIONS", "/", options_handler)
     app.router.add_route("OPTIONS", "/member_count", options_handler)
     app.router.add_route("OPTIONS", "/teams", options_handler)
@@ -8478,7 +8467,8 @@ async def teams_handler(request: web.Request):
     app.router.add_route("OPTIONS", "/auth/discord/login", options_handler)
     app.router.add_route("OPTIONS", "/auth/discord/callback", options_handler)
     app.router.add_route("OPTIONS", "/auth/me", options_handler)
-    # ---------- RAILWAY PORT FIX ----------
+
+    # ---------- START WEB SERVER ----------
     port = int(os.environ.get("PORT", 8080))
 
     runner = web.AppRunner(app)
@@ -8491,10 +8481,16 @@ async def teams_handler(request: web.Request):
 
     print(
         f"Web API running on port {port} "
-        f"(/member_count, /teams, /rules, /standings, /staff, /youtube-feed, "
+        f"(/, /member_count, /teams, /rules, /standings, /staff, /youtube-feed, "
         f"/report_score, /create_broadcast, "
         f"/auth/discord/login, /auth/discord/callback, /auth/me)"
     )
+
+    # ---------- START BACKGROUND TASKS ----------
+    try:
+        asyncio.create_task(_load_standings_cache())
+    except Exception as e:
+        print("Failed to start standings cache task:", repr(e))
 
 
 
