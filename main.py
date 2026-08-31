@@ -7341,19 +7341,19 @@ async def auth_callback(request: web.Request):
     state = request.query.get("state", "/")  # "media" from the button
 
     if not code:
-        raise web.HTTPFound("https://monkeleague.com/")
+        raise web.HTTPFound("https://monkeleaguecom.netlify.app/")
 
     try:
         access_token = await discord_exchange_code(code)
     except Exception:
-        raise web.HTTPFound("https://monkeleague.com/")
+        raise web.HTTPFound("https://monkeleaguecom.netlify.app/")
 
     # who is this user?
     try:
         user = await discord_get_user(access_token)
         user_id = int(user["id"])
     except Exception:
-        raise web.HTTPFound("https://monkeleague.com/")
+        raise web.HTTPFound("https://monkeleaguecom.netlify.app/")
 
     # which roles do they have in the test guild?
     try:
@@ -7362,14 +7362,14 @@ async def auth_callback(request: web.Request):
         roles = set()
 
     # Decide destination (on your main site)
-    dest = "https://monkeleague.com/"
+    dest = "https://monkeleaguecom.netlify.app/"
     if state == "media":
         if HEAD_CASTER_ROLE_ID in roles or CASTER_ROLE_ID in roles:
-            dest = "https://monkeleague.com/caster.html"
+            dest = "https://monkeleaguecom.netlify.app/caster"
         elif HEAD_REF_ROLE_ID in roles or REF_ROLE_ID in roles:
-            dest = "https://monkeleague.com/ref.html"
+            dest = "https://monkeleaguecom.netlify.app/ref"
         else:
-            dest = "https://monkeleague.com/"
+            dest = "https://monkeleaguecom.netlify.app/"
 
     raise web.HTTPFound(dest)
 
