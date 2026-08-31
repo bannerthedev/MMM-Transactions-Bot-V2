@@ -7381,7 +7381,7 @@ async def auth_me(request: web.Request):
 
 
 
-GOOGLE_DOC_ID = "1B6INe0kumto8kq2aN8eMxyvtPLDqRwWZovhNvXDqnhU"
+GOOGLE_DOC_ID = "13oV0PMW3IDApOX3JP7Nfat9X6dy4fp162Mp2VjXbCn0"
 DOC_EXPORT_URL = f"https://docs.google.com/document/d/{GOOGLE_DOC_ID}/export?format=html"
 
 def _build_id_from_title(title: str) -> str:
