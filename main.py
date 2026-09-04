@@ -7603,13 +7603,14 @@ async def start_web_api():
 
     # ---------- / ----------
     async def home_handler(request: web.Request):
-        resp = web.json_response(
+        response = web.json_response(
             {
                 "ok": True,
                 "message": "MMM API is running",
                 "routes": [
                     "/",
                     "/member_count",
+                    "/api/league-stats",
                     "/teams",
                     "/rules",
                     "/standings",
@@ -7623,7 +7624,8 @@ async def start_web_api():
                 ],
             }
         )
-        return add_cors(resp)
+
+        return add_cors(response)
 
     # ---------- /member_count ----------
     async def member_count_handler(request: web.Request):
@@ -7675,6 +7677,259 @@ async def start_web_api():
                 status=500,
             )
             return add_cors(resp)
+
+
+    # ---------- /api/league-stats ----------
+    async def league_stats_handler(request: web.Request):
+        """
+        Returns the live statistics used by the homepage tracker cards.
+        """
+
+        try:
+            guild = bot.get_guild(TEST_GUILD_ID)
+
+            if guild is None:
+                response = web.json_response(
+                    {
+                        "ok": False,
+                        "error": "guild_not_found",
+                        "online": 0,
+                        "members": 0,
+                        "status": "Offline",
+                        "teams": 0,
+                    },
+                    status=404,
+                )
+                return add_cors(response)
+
+            # -------------------------
+            # TOTAL MEMBERS
+            # -------------------------
+            total_members = guild.member_count or len(guild.members)
+
+            # -------------------------
+            # ONLINE HUMAN MEMBERS
+            # -------------------------
+            online_members = 0
+
+            for member in guild.members:
+                if member.bot:
+                    continue
+
+                if str(member.status) != "offline":
+                    online_members += 1
+
+            # -------------------------
+            # FIND REQUIRED TEAM ROLES
+            # -------------------------
+            def normalize_role_name(name):
+                return (
+                    str(name)
+                    .lower()
+                    .replace("—", "-")
+                    .replace("–", "-")
+                    .replace("_", " ")
+                    .replace("-", " ")
+                    .strip()
+                )
+
+            def find_role_any(possible_names):
+                normalized_names = {
+                    normalize_role_name(name)
+                    for name in possible_names
+                }
+
+                for role in guild.roles:
+                    if normalize_role_name(role.name) in normalized_names:
+                        return role
+
+                return None
+
+            team_player_role = find_role_any(
+                [
+                    "Team Player",
+                    "Team Players",
+                    "Player",
+                    "Players",
+                ]
+            )
+
+            # -------------------------
+            # FIND TEAM ROLE SEPARATOR
+            # -------------------------
+            def is_separator_role(role):
+                role_name = role.name.strip()
+                normalized = normalize_role_name(role_name)
+
+                return (
+                    "team roles" in normalized
+                    or "────" in role_name
+                    or "————" in role_name
+                    or "----" in role_name
+                    or "====" in role_name
+                    or "━━━━" in role_name
+                    or "━━━━━━━━" in role_name
+                )
+
+            separator_role = None
+
+            for role in guild.roles:
+                if is_separator_role(role):
+                    separator_role = role
+                    break
+
+            # -------------------------
+            # ROLES THAT ARE NOT TEAMS
+            # -------------------------
+            ignored_role_names = {
+                "@everyone",
+
+                # Team management roles
+                "Team-Executive",
+                "Team Executive",
+                "Executive",
+                "Executive Management",
+                "Executives",
+                "Captain",
+                "Captains",
+                "Co-Captain",
+                "Co Captain",
+                "CoCaptain",
+                "Co-Captains",
+                "CoCaptains",
+                "Team Player",
+                "Team Players",
+                "Player",
+                "Players",
+
+                # Staff roles
+                "Admin",
+                "Administrator",
+                "Moderator",
+                "Moderators",
+                "Mod",
+                "Mods",
+                "Staff",
+                "Owner",
+                "League Owner",
+                "Bot",
+                "Bots",
+                "Muted",
+                "Verified",
+                "Free Agent",
+                "League Staff",
+                "Commissioner",
+            }
+
+            ignored_role_names_normalized = {
+                normalize_role_name(name)
+                for name in ignored_role_names
+            }
+
+            blocked_team_keywords = [
+                "champion",
+                "mini champion",
+                "time capper",
+                "disbanded",
+                "inactive",
+                "former",
+                "old team",
+                "archive",
+                "archived",
+            ]
+
+            # -------------------------
+            # TEAM ROLE CHECK
+            # -------------------------
+            def is_team_role(role):
+                role_name = role.name.strip()
+                normalized = normalize_role_name(role_name)
+
+                if role == guild.default_role:
+                    return False
+
+                if role.managed:
+                    return False
+
+                if normalized in ignored_role_names_normalized:
+                    return False
+
+                if any(
+                    keyword in normalized
+                    for keyword in blocked_team_keywords
+                ):
+                    return False
+
+                if is_separator_role(role):
+                    return False
+
+                # Only roles below Team Player count as team roles.
+                if team_player_role is not None:
+                    if separator_role is not None:
+                        if not (
+                            separator_role.position
+                            < role.position
+                            < team_player_role.position
+                        ):
+                            return False
+                    else:
+                        if role.position >= team_player_role.position:
+                            return False
+
+                return True
+
+            # -------------------------
+            # COUNT ACTIVE TEAMS
+            # -------------------------
+            active_team_roles = []
+
+            for role in guild.roles:
+                if not is_team_role(role):
+                    continue
+
+                has_human_members = any(
+                    role in member.roles and not member.bot
+                    for member in guild.members
+                )
+
+                if has_human_members:
+                    active_team_roles.append(role)
+
+            # Change this if your league has another status system.
+            league_status = "Seeding"
+
+            response = web.json_response(
+                {
+                    "ok": True,
+                    "online": online_members,
+                    "members": total_members,
+                    "status": league_status,
+                    "teams": len(active_team_roles),
+                }
+            )
+
+            return add_cors(response)
+
+        except Exception as e:
+            print("Error in /api/league-stats:")
+            traceback.print_exc()
+
+            response = web.json_response(
+                {
+                    "ok": False,
+                    "error": "league_stats_route_failed",
+                    "details": str(e),
+                    "online": 0,
+                    "members": 0,
+                    "status": "Offline",
+                    "teams": 0,
+                },
+                status=500,
+            )
+
+            return add_cors(response)
+
+
 
     # ---------- /teams ----------
     async def teams_handler(request: web.Request):
@@ -8783,6 +9038,7 @@ async def start_web_api():
     # ---------- REGISTER GET ROUTES ----------
     app.router.add_get("/", home_handler)
     app.router.add_get("/member_count", member_count_handler)
+    app.router.add_get("/api/league-stats", league_stats_handler)
     app.router.add_get("/teams", teams_handler)
     app.router.add_get("/tracker", tracker_handler)
     app.router.add_get("/rules", rules_handler)
@@ -8802,17 +9058,17 @@ async def start_web_api():
     # ---------- REGISTER OPTIONS / CORS ROUTES ----------
     app.router.add_route("OPTIONS", "/", options_handler)
     app.router.add_route("OPTIONS", "/member_count", options_handler)
+    app.router.add_route(
+        "OPTIONS",
+        "/api/league-stats",
+        options_handler,
+    )
     app.router.add_route("OPTIONS", "/teams", options_handler)
     app.router.add_route("OPTIONS", "/tracker", options_handler)
     app.router.add_route("OPTIONS", "/rules", options_handler)
     app.router.add_route("OPTIONS", "/standings", options_handler)
     app.router.add_route("OPTIONS", "/staff", options_handler)
     app.router.add_route("OPTIONS", "/youtube-feed", options_handler)
-    app.router.add_route("OPTIONS", "/report_score", options_handler)
-    app.router.add_route("OPTIONS", "/create_broadcast", options_handler)
-    app.router.add_route("OPTIONS", "/auth/discord/login", options_handler)
-    app.router.add_route("OPTIONS", "/auth/discord/callback", options_handler)
-    app.router.add_route("OPTIONS", "/auth/me", options_handler)
 
     # ---------- START WEB SERVER ----------
     port = int(os.environ.get("PORT", 8080))
@@ -8852,61 +9108,58 @@ class MainBot(commands.Bot):
         super().__init__(command_prefix="!", intents=INTENTS)
         self._web_runner: web.AppRunner | None = None
 
-    async def setup_hook(self):
-        guild_obj = Object(id=TEST_GUILD_ID)
+async def setup_hook(self):
+    guild_obj = Object(id=TEST_GUILD_ID)
 
-        cog_names = [
-            "SettingsCog",
-            "AdminPanel",
-            "ManageTeam",
-            "DoneCommand",
-            "RosterCog",
-            "InfoCommands",
-            "AdminManage",
-            "FAQBracketCog",
-            "StandingCog",
-            "SchedulingAdmin",
-            "BracketAdmin",
-            "LeaveCog",
-            "AutoDisbandScrim",
-            "SaySomethingCog",
-            "ForceTimeCog",
-            "CommandGuideCog",
-            "YouTubePollerCog",
-            "AutoCodeCog",
-            "HeadsetInfoCog",
-            "ServerStatsCog",
-            "TeamRoleAutoOrderCog",
-            "RescrimCog",
-            "RoleOrderFixCog",
-            "GroupStageCog",
-        ]
-        for name in cog_names:
-            cls = globals().get(name)
-            if cls is None:
-                print(f"Skipping cog {name}: not defined")
-                continue
-            try:
-                await self.add_cog(cls(self))
-                print(f"Added cog: {name}")
-            except Exception:
-                import traceback
-                traceback.print_exc()
-                print(f"Failed to add cog: {name}")
+    cog_names = [
+        "SettingsCog",
+        "AdminPanel",
+        "ManageTeam",
+        "DoneCommand",
+        "RosterCog",
+        "InfoCommands",
+        "AdminManage",
+        "FAQBracketCog",
+        "StandingCog",
+        "SchedulingAdmin",
+        "BracketAdmin",
+        "LeaveCog",
+        "AutoDisbandScrim",
+        "SaySomethingCog",
+        "ForceTimeCog",
+        "CommandGuideCog",
+        "YouTubePollerCog",
+        "AutoCodeCog",
+        "HeadsetInfoCog",
+        "ServerStatsCog",
+        "TeamRoleAutoOrderCog",
+        "RescrimCog",
+        "RoleOrderFixCog",
+        "GroupStageCog",
+    ]
 
-        # register scan-teams on this bot's tree for this guild
-        self.tree.add_command(scan_teams, guild=guild_obj)
+    for name in cog_names:
+        cls = globals().get(name)
 
-        # start web API in background
-        self.loop.create_task(start_web_api())
+        if cls is None:
+            print(f"Skipping cog {name}: not defined")
+            continue
 
         try:
-            await self.tree.sync(guild=guild_obj)
-            print("Commands synced.")
+            await self.add_cog(cls(self))
+            print(f"Added cog: {name}")
         except Exception:
-            import traceback
             traceback.print_exc()
-            print("Failed to sync commands.")
+            print(f"Failed to add cog: {name}")
+
+    self.tree.add_command(scan_teams, guild=guild_obj)
+
+    try:
+        await self.tree.sync(guild=guild_obj)
+        print("Commands synced.")
+    except Exception:
+        traceback.print_exc()
+        print("Failed to sync commands.")
 
     async def close(self):
         if self._web_runner is not None:
@@ -8921,6 +9174,7 @@ bot = MainBot()
 
 web_api_started = False
 
+
 @bot.event
 async def on_ready():
     global web_api_started
@@ -8932,12 +9186,14 @@ async def on_ready():
         bot.loop.create_task(start_web_api())
         print("Started web API task")
 
-    # Do slow Discord stuff AFTER the API starts
     print("Loading guild members once...")
+
     try:
         for guild in bot.guilds:
             await guild.chunk(cache=True)
+
         print("Finished loading guild members.")
+
     except Exception as e:
         print("Failed to load guild members:", repr(e))
 
