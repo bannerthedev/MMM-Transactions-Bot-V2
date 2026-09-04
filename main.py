@@ -8821,165 +8821,196 @@ async def start_web_api():
             )
             return add_cors(resp)
 
-    # ---------- /staff ----------
-    async def staff_handler(request: web.Request):
-        STAFF_ROLE_ORDER = [
-            "owner",
-            "dev",
-            "admins",
-            "monke mods",
-            "trial mods",
-            "helper",
-        ]
+# ---------- /staff ----------
+async def staff_handler(request: web.Request):
+    # Roles that should appear on the website.
+    # The value is the display name shown by the frontend.
+    STAFF_ROLE_DISPLAY = {
+        "community manager": "Community Manager",
+        "admin": "Admin",
+        "mmm manager": "MMM Manager",
+        "monke mods": "Monke Mods",
+        "trial mod": "Trial Mod",
+        "staff": "Staff",
+    }
 
-        STAFF_ROLE_DISPLAY = {
-            "owner": "OWNER",
-            "dev": "DEV",
-            "admins": "Admins",
-            "monke mods": "Monke Mods",
-            "trial mods": "Trial Mods",
-            "helper": "Helper",
-        }
+    STAFF_ROLE_ORDER = [
+        "community manager",
+        "admin",
+        "mmm manager",
+        "monke mods",
+        "trial mod",
+        "staff",
+    ]
 
-        FALLBACK_ROLE_COLORS = {
-            "owner": "#facc15",
-            "dev": "#3b82f6",
-            "admins": "#ef4444",
-            "monke mods": "#a855f7",
-            "trial mods": "#22c55e",
-            "helper": "#14b8a6",
-        }
+    # Roles that must never appear as staff
+    EXCLUDED_ROLE_NAMES = {
+        "mmm developer",
+        "mmm transaction bot",
+        "mmm ticket bot",
+    }
 
-        CUSTOM_DISPLAY_ROLES = {
-            "banner1234": "DEV",
-            "mmm.compsova": "OWNER",
-        }
+    FALLBACK_ROLE_COLORS = {
+        "community manager": "#facc15",
+        "admin": "#ef4444",
+        "mmm manager": "#3b82f6",
+        "monke mods": "#a855f7",
+        "trial mod": "#22c55e",
+        "staff": "#14b8a6",
+    }
 
-        try:
-            guild = bot.get_guild(TEST_GUILD_ID)
+    def normalize_role_name(name):
+        """
+        Makes role matching case-insensitive and tolerant of
+        hyphens, underscores, and repeated spaces.
+        """
+        return (
+            str(name)
+            .lower()
+            .replace("—", "-")
+            .replace("–", "-")
+            .replace("_", " ")
+            .replace("-", " ")
+            .strip()
+        )
 
-            if guild is None:
-                resp = web.json_response(
-                    {
-                        "ok": False,
-                        "error": "guild_not_found",
-                        "staff": [],
-                    },
-                    status=404,
-                )
-                return add_cors(resp)
+    try:
+        guild = bot.get_guild(TEST_GUILD_ID)
 
-            staff = []
-
-            for member in guild.members:
-                if member.bot:
-                    continue
-
-                member_names = [
-                    (member.name or "").lower(),
-                    (member.display_name or "").lower(),
-                    (getattr(member, "global_name", "") or "").lower(),
-                ]
-
-                display_role_name = None
-                role_color = None
-                role_sort_index = 999
-
-                custom_role = None
-                for name in member_names:
-                    if name in CUSTOM_DISPLAY_ROLES:
-                        custom_role = CUSTOM_DISPLAY_ROLES[name]
-                        break
-
-                if custom_role:
-                    custom_key = custom_role.lower()
-
-                    display_role_name = custom_role
-                    role_sort_index = (
-                        STAFF_ROLE_ORDER.index(custom_key)
-                        if custom_key in STAFF_ROLE_ORDER
-                        else 999
-                    )
-
-                    matching_role = None
-                    for role in member.roles:
-                        if role.name.lower() == custom_key:
-                            matching_role = role
-                            break
-
-                    if matching_role and matching_role.color and matching_role.color.value != 0:
-                        role_color = str(matching_role.color)
-                    else:
-                        role_color = FALLBACK_ROLE_COLORS.get(custom_key, "#facc15")
-
-                else:
-                    for role_key in STAFF_ROLE_ORDER:
-                        found_role = None
-
-                        for role in member.roles:
-                            if role.name.lower() == role_key:
-                                found_role = role
-                                break
-
-                        if found_role:
-                            display_role_name = STAFF_ROLE_DISPLAY[role_key]
-                            role_sort_index = STAFF_ROLE_ORDER.index(role_key)
-
-                            if found_role.color and found_role.color.value != 0:
-                                role_color = str(found_role.color)
-                            else:
-                                role_color = FALLBACK_ROLE_COLORS.get(role_key, "#facc15")
-
-                            break
-
-                if not display_role_name:
-                    continue
-
-                try:
-                    avatar_url = member.display_avatar.url
-                except Exception:
-                    avatar_url = None
-
-                staff.append(
-                    {
-                        "id": str(member.id),
-                        "username": member.name,
-                        "display_name": member.display_name,
-                        "role": display_role_name,
-                        "role_color": role_color or "#facc15",
-                        "avatar": avatar_url,
-                        "highlighted": display_role_name.lower() in ["owner", "dev"],
-                        "sort": role_sort_index,
-                    }
-                )
-
-            staff.sort(key=lambda x: (x["sort"], x["display_name"].lower()))
-
-            for person in staff:
-                person.pop("sort", None)
-
-            resp = web.json_response(
-                {
-                    "ok": True,
-                    "staff": staff,
-                    "count": len(staff),
-                }
-            )
-            return add_cors(resp)
-
-        except Exception as e:
-            print("Error in /staff:")
-            traceback.print_exc()
-
+        if guild is None:
             resp = web.json_response(
                 {
                     "ok": False,
-                    "error": str(e),
+                    "error": "guild_not_found",
                     "staff": [],
+                    "count": 0,
                 },
-                status=500,
+                status=404,
             )
             return add_cors(resp)
+
+        staff = []
+        seen_member_ids = set()
+
+        for member in guild.members:
+            # Never display bots
+            if member.bot:
+                continue
+
+            # Avoid duplicate entries
+            if member.id in seen_member_ids:
+                continue
+
+            member_role_names = {
+                normalize_role_name(role.name)
+                for role in member.roles
+            }
+
+            # Excluded roles always take priority
+            if member_role_names.intersection(EXCLUDED_ROLE_NAMES):
+                continue
+
+            matching_roles = member_role_names.intersection(
+                STAFF_ROLE_DISPLAY.keys()
+            )
+
+            if not matching_roles:
+                continue
+
+            # If a member has multiple staff roles, use the
+            # highest-priority role from STAFF_ROLE_ORDER.
+            selected_role_name = next(
+                role_name
+                for role_name in STAFF_ROLE_ORDER
+                if role_name in matching_roles
+            )
+
+            selected_role = None
+
+            for role in member.roles:
+                if (
+                    normalize_role_name(role.name)
+                    == selected_role_name
+                ):
+                    selected_role = role
+                    break
+
+            if selected_role is not None:
+                try:
+                    if selected_role.color and selected_role.color.value != 0:
+                        role_color = str(selected_role.color)
+                    else:
+                        role_color = FALLBACK_ROLE_COLORS[selected_role_name]
+                except Exception:
+                    role_color = FALLBACK_ROLE_COLORS[selected_role_name]
+            else:
+                role_color = FALLBACK_ROLE_COLORS[selected_role_name]
+
+            try:
+                avatar_url = member.display_avatar.url
+            except Exception:
+                avatar_url = None
+
+            display_role_name = STAFF_ROLE_DISPLAY[selected_role_name]
+
+            staff.append(
+                {
+                    "id": str(member.id),
+                    "username": member.name,
+                    "display_name": member.display_name,
+                    "role": display_role_name,
+                    "role_color": role_color,
+                    "avatar": avatar_url,
+                    "highlighted": selected_role_name in {
+                        "community manager",
+                        "mmm manager",
+                    },
+                    "_sort": STAFF_ROLE_ORDER.index(selected_role_name),
+                }
+            )
+
+            seen_member_ids.add(member.id)
+
+        staff.sort(
+            key=lambda person: (
+                person["_sort"],
+                person["display_name"].lower(),
+            )
+        )
+
+        for person in staff:
+            person.pop("_sort", None)
+
+        resp = web.json_response(
+            {
+                "ok": True,
+                "staff": staff,
+                "count": len(staff),
+                "debug": {
+                    "cached_members": len(guild.members),
+                    "matched_staff": len(staff),
+                    "included_roles": list(STAFF_ROLE_DISPLAY.values()),
+                    "excluded_roles": list(EXCLUDED_ROLE_NAMES),
+                },
+            }
+        )
+
+        return add_cors(resp)
+
+    except Exception as e:
+        print("Error in /staff:")
+        traceback.print_exc()
+
+        resp = web.json_response(
+            {
+                "ok": False,
+                "error": str(e),
+                "staff": [],
+                "count": 0,
+            },
+            status=500,
+        )
+        return add_cors(resp)
 
     # ---------- /report_score ----------
     async def report_score_handler(request: web.Request):
