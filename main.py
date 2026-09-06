@@ -9157,68 +9157,85 @@ async def start_web_api():
 # ---------------- BOT SETUP ----------------
 class MainBot(commands.Bot):
     def __init__(self):
-        super().__init__(command_prefix="!", intents=INTENTS)
+        super().__init__(
+            command_prefix="!",
+            intents=INTENTS,
+        )
+
         self._web_runner: web.AppRunner | None = None
 
-async def setup_hook(self):
-    guild_obj = Object(id=TEST_GUILD_ID)
+    async def setup_hook(self):
+        print("setup_hook started", flush=True)
 
-    cog_names = [
-        "SettingsCog",
-        "AdminPanel",
-        "ManageTeam",
-        "DoneCommand",
-        "RosterCog",
-        "InfoCommands",
-        "AdminManage",
-        "FAQBracketCog",
-        "StandingCog",
-        "SchedulingAdmin",
-        "BracketAdmin",
-        "LeaveCog",
-        "AutoDisbandScrim",
-        "SaySomethingCog",
-        "ForceTimeCog",
-        "CommandGuideCog",
-        "YouTubePollerCog",
-        "AutoCodeCog",
-        "HeadsetInfoCog",
-        "ServerStatsCog",
-        "TeamRoleAutoOrderCog",
-        "RescrimCog",
-        "RoleOrderFixCog",
-        "GroupStageCog",
-    ]
+        guild_obj = discord.Object(id=TEST_GUILD_ID)
 
-    for name in cog_names:
-        cls = globals().get(name)
+        cog_names = [
+            "SettingsCog",
+            "AdminPanel",
+            "ManageTeam",
+            "DoneCommand",
+            "RosterCog",
+            "InfoCommands",
+            "AdminManage",
+            "FAQBracketCog",
+            "StandingCog",
+            "SchedulingAdmin",
+            "BracketAdmin",
+            "LeaveCog",
+            "AutoDisbandScrim",
+            "SaySomethingCog",
+            "ForceTimeCog",
+            "CommandGuideCog",
+            "YouTubePollerCog",
+            "AutoCodeCog",
+            "HeadsetInfoCog",
+            "ServerStatsCog",
+            "TeamRoleAutoOrderCog",
+            "RescrimCog",
+            "RoleOrderFixCog",
+            "GroupStageCog",
+        ]
 
-        if cls is None:
-            print(f"Skipping cog {name}: not defined")
-            continue
+        for name in cog_names:
+            cog_class = globals().get(name)
+
+            if cog_class is None:
+                print(f"Skipping cog {name}: not defined", flush=True)
+                continue
+
+            try:
+                await self.add_cog(cog_class(self))
+                print(f"Added cog: {name}", flush=True)
+            except Exception:
+                print(f"Failed to add cog: {name}", flush=True)
+                traceback.print_exc()
 
         try:
-            await self.add_cog(cls(self))
-            print(f"Added cog: {name}")
+            self.tree.add_command(
+                scan_teams,
+                guild=guild_obj,
+            )
+            print("Added scan_teams", flush=True)
         except Exception:
+            print("Failed to add scan_teams", flush=True)
             traceback.print_exc()
-            print(f"Failed to add cog: {name}")
 
-    self.tree.add_command(scan_teams, guild=guild_obj)
+        try:
+            synced = await self.tree.sync(guild=guild_obj)
 
-    try:
-        await self.tree.sync(guild=guild_obj)
-        print("Commands synced.")
-    except Exception:
-        traceback.print_exc()
-        print("Failed to sync commands.")
+            print(
+                "Commands synced:",
+                [command.name for command in synced],
+                flush=True,
+            )
+        except Exception:
+            print("Command sync failed", flush=True)
+            traceback.print_exc()
 
     async def close(self):
         if self._web_runner is not None:
-            try:
-                await self._web_runner.cleanup()
-            except Exception:
-                pass
+            await self._web_runner.cleanup()
+
         await super().close()
 
 
