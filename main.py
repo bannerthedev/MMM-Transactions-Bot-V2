@@ -1927,9 +1927,9 @@ class AddScrimModal(discord.ui.Modal, title="Add Scrim"):
         else:
             msg = (
                 f"{t1m} vs {t2m}\n\n"
-                f"# Welcome to MMM Bracket\n"
-                f"> 🗓️ You guys will have 3 day to schedule\n"
-                f"> ⚔️ And 4 days to play\n"
+                f"# Welcome to MMM Seeding\n"
+                f"> 🗓️ You guys will have 5 day to schedule\n"
+                f"> ⚔️ And 6 days to play\n"
                 f"> Ping a staff member when you're ready to schedule or have any questions!"
             )
 
